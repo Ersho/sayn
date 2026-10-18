@@ -1,0 +1,834 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
+
+const API = "http://localhost:8000";
+
+type Device = { serial: string; model: string; name: string; state: string; first_seen: number; last_seen: number };
+type App = {
+  id: string; name: string; request: string; agent?: string; model?: string; status: string; package: string;
+  installed_on: string[]; apk: boolean; apk_mb: number | null; error?: string; summary?: string;
+  fix_rounds?: number; version: string; build: number; created: number; updated: number;
+  history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
+  inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean };
+};
+type StoreApp = {
+  appId: string; title: string; developer: string; icon: string; score: number | null; installs: string | null;
+  genre: string | null; summary: string;
+};
+type StoreDetails = StoreApp & { description: string; screenshots: string[]; url: string; reviews: { score: number; text: string }[] };
+type View = "apps" | "devices" | "inspire" | "new" | "settings";
+type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null; enabled: boolean };
+type Subscription = { id: string; label: string; ok: boolean; detail: string };
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...init });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+/** Play Store images go through the backend, which caches them on disk (Google rate-limits direct hotlinking). */
+const storeImg = (url: string, w: number) => `${API}/inspire/image?u=${encodeURIComponent(url)}&w=${w}`;
+
+const fmtDate = (t: number) =>
+  new Date(t * 1000).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+function ago(t: number) {
+  const s = Date.now() / 1000 - t;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  const d = Math.floor(s / 86400);
+  if (d < 7) return `${d} day${d > 1 ? "s" : ""} ago`;
+  const w = Math.floor(d / 7);
+  return w < 5 ? `${w} week${w > 1 ? "s" : ""} ago` : fmtDate(t);
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", coding: "Writing code", building: "Building",
+  fixing: "Fixing build", ready: "Ready to install", failed: "Failed", unknown: "Imported",
+};
+const BUSY = new Set(["created", "preparing", "inspiring", "coding", "building", "fixing"]);
+const CATEGORY_LABEL: Record<string, string> = {
+  PRODUCTIVITY: "Productivity", HEALTH_AND_FITNESS: "Health & fitness", LIFESTYLE: "Lifestyle", TOOLS: "Tools",
+  EDUCATION: "Education", FINANCE: "Finance", FOOD_AND_DRINK: "Food & drink", TRAVEL_AND_LOCAL: "Travel",
+  HOUSE_AND_HOME: "Home", PARENTING: "Parenting", SPORTS: "Sports", WEATHER: "Weather",
+  GAME_PUZZLE: "Puzzle games", GAME_CASUAL: "Casual games", GAME_WORD: "Word games",
+};
+const AGENTS = {
+  claude: { label: "Claude Code", blurb: "Thoughtful, reliable, great for polished apps." },
+  codex: { label: "Codex", blurb: "Fast and versatile, ideal for iterative builds." },
+};
+const IDEAS = [
+  { label: "Daily journal", text: "A private offline journal with a daily prompt, mood tracker, and a calendar of past entries. Warm colors and a calm, minimal design." },
+  { label: "Workout tracker", text: "A workout tracker: log exercises with sets, reps and weight, see history per exercise, and a weekly summary." },
+  { label: "Focus timer", text: "A focus timer with 25-minute sessions and 5-minute breaks, a daily session count, and gentle sounds when a session ends." },
+];
+const TONES = ["green", "lavender", "sand", "sky", "rose"];
+
+/* ---------- icons (inline SVG, 20px grid) ---------- */
+const I = {
+  grid: <svg viewBox="0 0 20 20"><rect x="3" y="3" width="6" height="6" rx="1.5" /><rect x="11" y="3" width="6" height="6" rx="1.5" /><rect x="3" y="11" width="6" height="6" rx="1.5" /><rect x="11" y="11" width="6" height="6" rx="1.5" /></svg>,
+  phone: <svg viewBox="0 0 20 20"><rect x="5" y="2" width="10" height="16" rx="2" /><circle cx="10" cy="15" r=".8" fill="currentColor" /></svg>,
+  plus: <svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" /></svg>,
+  newfile: <svg viewBox="0 0 20 20"><path d="M11 2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7z" /><path d="M11 2v5h5M10 10v5M7.5 12.5h5" /></svg>,
+  search: <svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.5" /><path d="M13 13l4 4" /></svg>,
+  pencil: <svg viewBox="0 0 20 20"><path d="M3 17l3.5-.7L16 6.8a1.5 1.5 0 0 0 0-2.1l-.7-.7a1.5 1.5 0 0 0-2.1 0L3.7 13.5z" /></svg>,
+  download: <svg viewBox="0 0 20 20"><path d="M10 3v10M6 9l4 4 4-4M4 17h12" /></svg>,
+  arrow: <svg viewBox="0 0 20 20"><path d="M4 10h12M11 5l5 5-5 5" /></svg>,
+  check: <svg viewBox="0 0 20 20"><path d="M5 10.5l3.5 3.5L15 7" /></svg>,
+  chevron: <svg viewBox="0 0 20 20"><path d="M7 5l5 5-5 5" /></svg>,
+  shield: <svg viewBox="0 0 20 20"><path d="M10 2l6 2.5v5c0 4-2.6 6.6-6 8.5-3.4-1.9-6-4.5-6-8.5v-5z" /><path d="M7.5 10l2 2 3.5-3.5" /></svg>,
+  android: <svg viewBox="0 0 20 20"><path d="M4 9a6 6 0 0 1 12 0v6H4z" /><path d="M6 5l-1.5-2M14 5l1.5-2" /><circle cx="8" cy="8" r=".6" fill="currentColor" /><circle cx="12" cy="8" r=".6" fill="currentColor" /></svg>,
+  sprout: <svg viewBox="0 0 20 20"><path d="M10 17v-7" /><path d="M10 10c0-3 2-5 6-5 0 3-2 5-6 5zM10 12c0-2.5-1.5-4-5-4 0 2.5 1.5 4 5 4z" /></svg>,
+  claude: <svg viewBox="0 0 20 20"><path d="M10 3v14M3 10h14M5 5l10 10M15 5L5 15" /></svg>,
+  codex: <svg viewBox="0 0 20 20"><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z" /><path d="M10 6.5l3 1.75v3.5L10 13.5l-3-1.75v-3.5z" /></svg>,
+  bulb: <svg viewBox="0 0 20 20"><path d="M7 14.5a5.5 5.5 0 1 1 6 0V16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1z" /><path d="M8.5 18.5h3" /></svg>,
+  gear: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>,
+  star: <svg viewBox="0 0 20 20"><path d="M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z" fill="currentColor" /></svg>,
+};
+const Icon = ({ i, className }: { i: ReactNode; className?: string }) => <span className={`ic ${className ?? ""}`}>{i}</span>;
+
+/* ---------- data hooks ---------- */
+function useDevices() {
+  const [devices, setDevices] = useState<Device[]>([]);
+  useEffect(() => {
+    const load = () => api<Device[]>("/devices").then(setDevices).catch(() => setDevices([]));
+    load();
+    const t = setInterval(load, 3000);
+    return () => clearInterval(t);
+  }, []);
+  return devices;
+}
+
+function useApps() {
+  const [apps, setApps] = useState<App[]>([]);
+  const load = () => api<App[]>("/apps").then(setApps).catch(console.error);
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+  return { apps, reload: load };
+}
+
+/** Follows one app's SSE stream while a job runs; returns the latest status and the technical log. */
+function useJob(id: string, reload: () => void) {
+  const [log, setLog] = useState<string[]>([]);
+  const [status, setStatus] = useState("");
+  useEffect(() => {
+    if (!id) return;
+    setLog([]); setStatus("created");
+    const es = new EventSource(`${API}/apps/${id}/events`);
+    const add = (prefix: string) => (e: MessageEvent) => setLog((l) => [...l, prefix + e.data]);
+    es.addEventListener("codex", add("agent  | "));
+    es.addEventListener("build", add("build  | "));
+    es.addEventListener("deploy", add("deploy | "));
+    es.addEventListener("status", (e) => { setStatus(e.data); setLog((l) => [...l, `status | ${e.data}`]); reload(); });
+    es.addEventListener("end", () => { es.close(); reload(); });
+    es.onerror = () => es.close();
+    return () => es.close();
+  }, [id]);
+  return { log, status };
+}
+
+/* ---------- small pieces ---------- */
+function Badge({ status }: { status: string }) {
+  const busy = BUSY.has(status);
+  return (
+    <span className={`badge badge-${busy ? "busy" : status}`}>
+      {status === "ready" ? <Icon i={I.check} /> : busy ? <span className="dot" /> : null}
+      {STATUS_LABEL[status] ?? status}
+    </span>
+  );
+}
+
+function Progress({ status, log, inspired }: { status: string; log: string[]; inspired?: boolean }) {
+  const [showLog, setShowLog] = useState(false);
+  const logRef = useRef<HTMLPreElement>(null);
+  useEffect(() => { if (showLog) logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [log, showLog]);
+  const keys = ["preparing", ...(inspired ? ["inspiring"] : []), "coding", "building", "ready"];
+  const label: Record<string, string> = {
+    preparing: "Preparing project", inspiring: "Studying the original app", coding: "Writing the code",
+    building: status === "fixing" ? "Fixing the build" : "Building the app", ready: "Ready to install",
+  };
+  const steps = keys.map((k) => label[k]);
+  const idx = keys.indexOf(status === "fixing" ? "building" : status);
+  return (
+    <div className="progress">
+      <ol className="steps">
+        {steps.map((label, i) => (
+          <li key={i} className={i < idx || status === "ready" ? "done" : i === idx ? "active" : ""}>
+            <span className="step-dot">{i < idx || status === "ready" ? <Icon i={I.check} /> : i + 1}</span>{label}
+          </li>
+        ))}
+      </ol>
+      {status === "failed" && <p className="error">The build failed after several fix attempts. Open the app card for details.</p>}
+      <button className="link" onClick={() => setShowLog((v) => !v)}>{showLog ? "Hide technical log" : "Show technical log"}</button>
+      {showLog && <pre ref={logRef} className="log">{log.join("\n")}</pre>}
+    </div>
+  );
+}
+
+function DeployButton({ app, devices, onDone }: { app: App; devices: Device[]; onDone: () => void }) {
+  const online = devices.filter((d) => d.state === "device");
+  const [serial, setSerial] = useState("");
+  const [busy, setBusy] = useState(false);
+  const chosen = serial || online[0]?.serial || "";
+  const disabled = !app.apk || online.length === 0 || busy;
+  const title = !app.apk ? "Not built yet" : online.length === 0 ? "Plug in a device to install" : "";
+  const installed = app.installed_on.includes(chosen);
+  return (
+    <span className="deploy">
+      {online.length > 1 && (
+        <select value={chosen} onChange={(e) => setSerial(e.target.value)}>
+          {online.map((d) => <option key={d.serial} value={d.serial}>{d.name || d.model || d.serial}</option>)}
+        </select>
+      )}
+      <button className="ghost" disabled={disabled} title={title}
+        onClick={async () => {
+          setBusy(true);
+          try { await api(`/apps/${app.id}/deploy`, { method: "POST", body: JSON.stringify({ serial: chosen }) }); }
+          catch (e) { alert(String(e)); }
+          setBusy(false);
+          onDone();
+        }}>
+        <Icon i={I.download} />{busy ? "Installing…" : installed ? "Reinstall on device" : "Install on device"}
+      </button>
+    </span>
+  );
+}
+
+function describeCommit(m: string) {
+  if (m === "template") return "Started from the blank template";
+  const who = m.startsWith("claude:") ? "Claude Code" : "Codex";
+  if (/^(codex|claude): create$/.test(m)) return `First version written by ${who}`;
+  const fix = m.match(/^(?:codex|claude): fix (\d+)/);
+  if (fix) return `Build fix #${fix[1]}`;
+  const rev = m.match(/^(?:codex|claude): revise: (.*)/);
+  if (rev) return `Revised: ${rev[1]}`;
+  return m;
+}
+
+/* ---------- app card ---------- */
+function AppCard({ app, tone, devices, reload, onRevise }: {
+  app: App; tone: string; devices: Device[]; reload: () => void; onRevise: (app: App) => void;
+}) {
+  const [history, setHistory] = useState(false);
+  const [shotKey, setShotKey] = useState(0);
+  const [details, setDetails] = useState(false);
+  const [making, setMaking] = useState(false);
+  const phones = app.installed_on.map((s) => devices.find((d) => d.serial === s)?.name || devices.find((d) => d.serial === s)?.model || s);
+  const busy = BUSY.has(app.status);
+  return (
+    <article className={`app-card tone-${tone}`}>
+      <div className="hero">
+        <span className="spark" />
+        <div className="frame clickable" onClick={() => setDetails(true)}>
+          {app.screenshot
+            ? <img src={`${API}/apps/${app.id}/screenshot.png?${shotKey || app.updated}`} alt={`${app.name} on the device`} />
+            : <div className="frame-empty"><span className="glyph">{app.name[0]?.toUpperCase()}</span><small>{app.name}</small></div>}
+        </div>
+      </div>
+      <div className="body">
+        <div className="title-row">
+          <span className="app-icon">{app.name[0]?.toUpperCase()}</span>
+          <div className="title">
+            <h3>{app.name}</h3>
+            <div className="meta">v{app.version} · {busy ? "Working now" : `Updated ${ago(app.updated)}`}</div>
+          </div>
+          <Badge status={app.status} />
+        </div>
+        <p className="desc">{app.summary || app.request}</p>
+        <button className="link" onClick={() => setDetails(true)}>Details &amp; screenshot <Icon i={I.arrow} /></button>
+        {app.inspiration && (
+          <p className="inspired-by"><img src={storeImg(app.inspiration.icon, 64)} alt="" />Inspired by {app.inspiration.title}{app.inspiration.apk ? " (studied the original app)" : ""}</p>
+        )}
+        {phones.length > 0 &&<p className="installed"><Icon i={I.check} />Installed on {phones.join(", ")}</p>}
+        {app.status === "failed" && <details className="fail"><summary>Build failed, show details</summary><pre>{app.error}</pre></details>}
+        <button className="link" onClick={() => setHistory((v) => !v)}>Version history <Icon i={I.arrow} /></button>
+        {history && (
+          <ol className="history">
+            {app.history.map((h, i) => <li key={i}><span className="muted">{fmtDate(h.time)}</span>{describeCommit(h.message)}</li>)}
+          </ol>
+        )}
+        <div className="card-actions">
+          <button className="outline" disabled={busy} onClick={() => onRevise(app)}><Icon i={I.pencil} />Revise app</button>
+          <DeployButton app={app} devices={devices} onDone={() => { setShotKey(Date.now()); reload(); }} />
+        </div>
+      </div>
+      {details && (
+        <div className="modal-bg" onClick={() => setDetails(false)}>
+          <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+            <p className="eyebrow">{app.name} · v{app.version}</p>
+            <h2>About this app</h2>
+            <p className="field-label">Try it</p>
+            {app.preview ? (
+              <div className="try-frame"><iframe src={`${API}/apps/${app.id}/preview/`} title={`${app.name} preview`} /></div>
+            ) : (
+              <button className="outline" disabled={making || !app.apk} onClick={async () => {
+                setMaking(true);
+                try { await api(`/apps/${app.id}/preview`, { method: "POST" }); reload(); }
+                catch (e) { alert(String(e)); }
+                setMaking(false);
+              }}>{making ? "Preparing preview (about 40 s)…" : "Make a preview you can try"}</button>
+            )}
+            <p className="muted small">A browser preview: close to the real app, but phone features like sensors may not work.</p>
+            <p className="field-label">Screenshots</p>
+            {app.screenshot || app.reference_shots.length > 0 ? (
+              <div className="shots">
+                {app.screenshot && <img src={`${API}/apps/${app.id}/screenshot.png?${shotKey || app.updated}`} alt={`${app.name} on the device`} />}
+                {app.reference_shots.map((n) => <img key={n} src={`${API}/apps/${app.id}/reference/${n}`} alt="" loading="lazy" />)}
+              </div>
+            ) : (
+              <p className="muted">No screenshot yet. Install the app on your device and one is taken automatically.</p>
+            )}
+            {app.screenshot && app.reference_shots.length > 0 && <p className="muted small">First: your app on the device. The rest: the original app's Play Store screenshots.</p>}
+            <p className="field-label">What it does</p>
+            <p className="full-desc">{app.summary || app.request}</p>
+            {app.summary && app.request && (<>
+              <p className="field-label">Your original request</p>
+              <p className="full-desc">{app.request}</p>
+            </>)}
+            <p className="field-label">Version history</p>
+            <ol className="history">
+              {app.history.map((h, i) => <li key={i}><span className="muted">{fmtDate(h.time)}</span>{describeCommit(h.message)}</li>)}
+            </ol>
+            <div className="row-end"><button className="outline" onClick={() => setDetails(false)}>Close</button></div>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+function ReviseDialog({ app, onClose, onStarted }: { app: App; onClose: () => void; onStarted: (id: string) => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <p className="eyebrow">Revise {app.name}</p>
+        <h2>What should change?</h2>
+        <p className="sub">Describe the change in plain language. Your assistant updates the app and builds a new version.</p>
+        <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} autoFocus
+          placeholder="e.g. add a dark mode and make the buttons bigger" />
+        <div className="row-end">
+          <button className="outline" onClick={onClose}>Cancel</button>
+          <button className="primary" disabled={!text.trim() || busy} onClick={async () => {
+            setBusy(true);
+            try {
+              await api(`/apps/${app.id}/revise`, { method: "POST", body: JSON.stringify({ request: text }) });
+              onStarted(app.id);
+            } catch (e) { alert(String(e)); setBusy(false); }
+          }}>{busy ? "Starting…" : "Update my app"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AgentPicker({ agent, setAgent }: { agent: keyof typeof AGENTS; setAgent: (a: keyof typeof AGENTS) => void }) {
+  return (
+    <>
+      <p className="field-label">Choose your coding assistant</p>
+      <div className="agents">
+        {(Object.keys(AGENTS) as (keyof typeof AGENTS)[]).map((k) => (
+          <button key={k} className={`agent ${agent === k ? "on" : ""}`} onClick={() => setAgent(k)}>
+            <span className={`agent-logo ${k}`}><Icon i={I[k]} /></span>
+            <span className="grow"><b>{AGENTS[k].label}</b><small>{AGENTS[k].blurb}</small></span>
+            <span className="radio" />
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/* ---------- Play Store inspiration ---------- */
+function StoreCard({ app, onPick }: { app: StoreApp; onPick: (a: StoreApp) => void }) {
+  return (
+    <article className="store-card">
+      <div className="store-head">
+        <img className="store-icon" src={storeImg(app.icon, 128)} alt="" loading="lazy" />
+        <div className="title">
+          <h3>{app.title}</h3>
+          <div className="meta">{app.developer}{app.genre ? ` · ${app.genre}` : ""}</div>
+        </div>
+      </div>
+      <p className="desc">{app.summary}</p>
+      <div className="store-foot">
+        <span className="rating">{app.score ? <><Icon i={I.star} />{app.score.toFixed(1)}</> : null}{app.installs ? <span className="muted"> · {app.installs} installs</span> : null}</span>
+        <button className="outline" onClick={() => onPick(app)}><Icon i={I.bulb} />Make my own version</button>
+      </div>
+    </article>
+  );
+}
+
+function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
+  const [categories, setCategories] = useState<string[]>(Object.keys(CATEGORY_LABEL));
+  const [category, setCategory] = useState("PRODUCTIVITY");
+  const [q, setQ] = useState("");
+  const [term, setTerm] = useState("");
+  const [apps, setApps] = useState<StoreApp[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  useEffect(() => { api<{ categories: string[] }>("/inspire").then((i) => setCategories(i.categories)).catch(() => {}); }, []);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError("");
+    const p = term ? api<StoreApp[]>(`/inspire/search?q=${encodeURIComponent(term)}`) : api<StoreApp[]>(`/inspire/top/${category}`);
+    p.then((a) => { if (alive) setApps(a); })
+      .catch((e) => { if (alive) { setApps([]); setError(String(e)); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [category, term]);
+  return (
+    <>
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">Borrow the idea, make it yours</p>
+          <h1>Popular on the Play Store.</h1>
+          <p className="sub">Pick an app you like and your assistant builds your own version of it, with the changes you want.</p>
+        </div>
+      </header>
+      <div className="toolbar">
+        <div className="chips">
+          {categories.map((c) => (
+            <button key={c} className={`chip ${!term && category === c ? "on" : ""}`} onClick={() => { setTerm(""); setQ(""); setCategory(c); }}>
+              {CATEGORY_LABEL[c] ?? c}
+            </button>
+          ))}
+        </div>
+        <form className="search" onSubmit={(e) => { e.preventDefault(); setTerm(q.trim()); }}>
+          <Icon i={I.search} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the Play Store…" />
+          {term && <button type="button" className="link" onClick={() => { setQ(""); setTerm(""); }}>Clear</button>}
+        </form>
+      </div>
+      {loading ? (
+        <p className="foot-note"><span className="dot" />Looking at the Play Store…</p>
+      ) : error ? (
+        <div className="empty-card"><h2>The Play Store did not answer.</h2><p className="sub">Try again in a moment, or search for something else.</p><p className="muted small">{error}</p></div>
+      ) : apps.length === 0 ? (
+        <div className="empty-card"><h2>Nothing found.</h2><p className="sub">Try another search or category.</p></div>
+      ) : (
+        <div className="store-cards">{apps.map((a) => <StoreCard key={a.appId} app={a} onPick={onPick} />)}</div>
+      )}
+      <p className="foot-note"><Icon i={I.shield} />Only the idea is borrowed. Your app gets its own name, look and code, and nothing is copied from the original.</p>
+    </>
+  );
+}
+
+function InspireDialog({ app, onClose, onStarted }: { app: StoreApp; onClose: () => void; onStarted: (id: string) => void }) {
+  const [details, setDetails] = useState<StoreDetails | null>(null);
+  const [apkReady, setApkReady] = useState(false);
+  const [more, setMore] = useState(false);
+  const [notes, setNotes] = useState("");
+  const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
+  const [apk, setApk] = useState(false);
+  const [reviews, setReviews] = useState(true);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api<StoreDetails>(`/inspire/app/${app.appId}`).then(setDetails).catch(() => setDetails(null));
+    api<{ apk_ready: boolean }>("/inspire").then((i) => setApkReady(i.apk_ready)).catch(() => {});
+  }, [app.appId]);
+  const good = details?.reviews.filter((r) => r.score >= 4).length ?? 0;
+  const bad = details?.reviews.filter((r) => r.score <= 2).length ?? 0;
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+        <div className="store-head">
+          <img className="store-icon" src={storeImg(app.icon, 128)} alt="" />
+          <div className="title">
+            <p className="eyebrow">Make my own version of</p>
+            <h2>{app.title}</h2>
+            <div className="meta">{app.developer}{app.score ? ` · ${app.score.toFixed(1)} stars` : ""}</div>
+          </div>
+        </div>
+        {details && details.screenshots.length > 0 && (
+          <div className="shots">{details.screenshots.slice(0, 6).map((s) => <img key={s} src={storeImg(s, 480)} alt="" loading="lazy" />)}</div>
+        )}
+        <p className={`store-desc ${more ? "open" : ""}`}>{details?.description ?? app.summary}</p>
+        {details && details.description.length > 300 && (
+          <button className="link" onClick={() => setMore((v) => !v)}>{more ? "Show less" : "Read the full description"}</button>
+        )}
+        <label className="field">What should be different in your version? <span className="muted">(optional)</span>
+          <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. simpler, offline only, a calmer design, and add a weekly summary" />
+        </label>
+        <label className="check">
+          <input type="checkbox" checked={reviews} onChange={(e) => setReviews(e.target.checked)} />
+          <span>
+            <b>Learn from user reviews</b>
+            <small>{details ? `Your assistant reads ${details.reviews.length} user reviews (${good} happy, ${bad} unhappy)` : "Your assistant reads user reviews"} to keep what people love and fix what they complain about. Untick to build from the description and screenshots only.</small>
+          </span>
+        </label>
+        <label className={`check ${apkReady ? "" : "off"}`}>
+          <input type="checkbox" checked={apk} disabled={!apkReady} onChange={(e) => setApk(e.target.checked)} />
+          <span>
+            <b>Also study the original app itself</b>
+            <small>{apkReady
+              ? "Downloads the app and lets your assistant look at how it is built, for a closer match of screens and features. Adds roughly 5 extra minutes."
+              : "Not set up on this laptop yet. Run scripts\\setup.ps1 again to enable it."}</small>
+          </span>
+        </label>
+        <AgentPicker agent={agent} setAgent={setAgent} />
+        <div className="row-end">
+          <button className="outline" onClick={onClose}>Cancel</button>
+          <button className="primary" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, inspiration: { app_id: app.appId, apk, reviews } }) });
+              onStarted(r.id);
+            } catch (e) { alert(String(e)); setBusy(false); }
+          }}>{busy ? "Starting…" : "Build my version"} <Icon i={I.arrow} /></button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- pages ---------- */
+function AppsPage({ apps, devices, reload, go, job, onRevise }: {
+  apps: App[]; devices: Device[]; reload: () => void; go: (v: View) => void; job: string; onRevise: (a: App) => void;
+}) {
+  const [filter, setFilter] = useState<"all" | "installed">("all");
+  const [q, setQ] = useState("");
+  const installed = apps.filter((a) => a.installed_on.length > 0);
+  const shown = (filter === "all" ? apps : installed)
+    .filter((a) => !q || (a.name + " " + a.request + " " + (a.summary ?? "")).toLowerCase().includes(q.toLowerCase()));
+  return (
+    <>
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">Your personal app studio</p>
+          <h1>Small apps. Big possibilities.</h1>
+          <p className="sub">Your ideas, made real. All in one place.</p>
+        </div>
+        <button className="primary big" onClick={() => go("new")}><Icon i={I.plus} />New app</button>
+      </header>
+      <div className="toolbar">
+        <div className="segmented">
+          <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All apps ({apps.length})</button>
+          <button className={filter === "installed" ? "on" : ""} onClick={() => setFilter("installed")}>Installed ({installed.length})</button>
+        </div>
+        <label className="search"><Icon i={I.search} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your apps…" /></label>
+      </div>
+      {shown.length === 0 ? (
+        <div className="empty-card">
+          <h2>{apps.length === 0 ? "No apps yet." : "Nothing matches."}</h2>
+          <p className="sub">{apps.length === 0 ? "Describe an idea and your assistant turns it into an Android app." : "Try another search or filter."}</p>
+          {apps.length === 0 && <button className="primary big" onClick={() => go("new")}>Create your first app <Icon i={I.arrow} /></button>}
+        </div>
+      ) : (
+        <div className="cards">
+          {shown.map((a) => (
+            <AppCard key={a.id} app={a} tone={TONES[apps.indexOf(a) % TONES.length]} devices={devices} reload={reload} onRevise={onRevise} />
+          ))}
+        </div>
+      )}
+      {job && apps.find((a) => a.id === job && BUSY.has(a.status)) && (
+        <p className="foot-note"><span className="dot" />An app is being built. <button className="link" onClick={() => go("new")}>Follow the progress</button></p>
+      )}
+      <p className="foot-note"><Icon i={I.android} />Your apps have a life of their own. Once installed, they run without your laptop.</p>
+    </>
+  );
+}
+
+function DeviceName({ d }: { d: Device }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState("");
+  const [name, setName] = useState(d.name);  // shown right after saving, before the next poll brings it back
+  useEffect(() => setName(d.name), [d.name]);
+  const save = async () => {
+    if (!editing) return;  // Enter then blur would save twice
+    setEditing(false);
+    const next = text.trim();
+    if (next === name) return;
+    setName(next);
+    try { await api(`/devices/${encodeURIComponent(d.serial)}/name`, { method: "PUT", body: JSON.stringify({ name: next }) }); }
+    catch { setName(d.name); }
+  };
+  if (editing) {
+    return <input className="name-input" autoFocus value={text} maxLength={40} placeholder={d.model || "Name this device"}
+      onChange={(e) => setText(e.target.value)} onBlur={save}
+      onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />;
+  }
+  return (
+    <b>{name || d.model || "Android device"}
+      <button className="ghost rename" title="Rename" onClick={() => { setText(name); setEditing(true); }}><Icon i={I.pencil} /></button>
+    </b>
+  );
+}
+
+function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
+  const online = devices.filter((d) => d.state === "device");
+  const waiting = devices.filter((d) => d.state !== "device" && d.state !== "offline");
+  const past = devices.filter((d) => d.state === "offline");
+  const row = (d: Device) => {
+    const mine = apps.filter((a) => a.installed_on.includes(d.serial));
+    const label = d.state === "device" ? "Connected" : d.state === "offline" ? `Last seen ${ago(d.last_seen)}` : d.state === "unauthorized" ? "Waiting for you to tap “Allow” on the phone" : d.state;
+    return (
+      <li key={d.serial} className={`phone-row ${d.state}`}>
+        <span className="phone-icon"><Icon i={I.phone} /></span>
+        <div className="grow">
+          <DeviceName d={d} />
+          <div className="meta">{label} · serial {d.serial}</div>
+          {d.state === "device" && (
+            <div className="meta">{mine.length ? `Apps from here: ${mine.map((a) => a.name).join(", ")}` : "No vibeApping apps installed yet"}</div>
+          )}
+        </div>
+        <span className={`badge badge-${d.state === "device" ? "ready" : d.state === "offline" ? "unknown" : "failed"}`}>
+          {d.state === "device" ? <><Icon i={I.check} />Online</> : d.state === "offline" ? "Not connected" : "Needs attention"}
+        </span>
+      </li>
+    );
+  };
+  return (
+    <>
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">The last step is the best one</p>
+          <h1>Your apps. In your pocket.</h1>
+          <p className="sub">Connect an Android phone or tablet and take your creations with you.</p>
+        </div>
+      </header>
+      <div className="two-col">
+        <section className="panel">
+          {online.length === 0 && waiting.length === 0 ? (
+            <div className="empty-phone">
+              <div className="phone-art"><Icon i={I.phone} /><span className="plus-bubble"><Icon i={I.plus} /></span></div>
+              <h2>A new home for your ideas.</h2>
+              <p className="sub">No devices connected yet. Plug in an Android phone or tablet to get started.</p>
+              <p className="muted small">A USB cable is all you need to start.</p>
+            </div>
+          ) : (
+            <>
+              <h2 className="panel-title">Connected now</h2>
+              <ul className="phone-list">{[...online, ...waiting].map(row)}</ul>
+            </>
+          )}
+          {past.length > 0 && (
+            <>
+              <h2 className="panel-title">Previously connected</h2>
+              <ul className="phone-list">{past.map(row)}</ul>
+            </>
+          )}
+        </section>
+        <aside className="panel">
+          <p className="eyebrow">Connect in a few minutes</p>
+          <ol className="guide">
+            <li><span className="num">1</span><div><b>Plug your phone or tablet into your laptop</b><p>Use a USB cable that supports data transfer.</p></div></li>
+            <li><span className="num">2</span><div><b>Enable USB debugging</b><p>Open Developer options on your device. <a href="https://developer.android.com/studio/debug/dev-options" target="_blank" rel="noreferrer">Show me how <Icon i={I.arrow} /></a></p></div></li>
+            <li><span className="num">3</span><div><b>Allow this computer</b><p>Accept the prompt on your device, then choose an app to install.</p></div></li>
+          </ol>
+        </aside>
+      </div>
+      <p className="foot-note bar"><Icon i={I.shield} />Your apps stay yours. Installed apps run independently of your laptop.</p>
+    </>
+  );
+}
+
+function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
+  apps: App[]; devices: Device[]; reload: () => void; job: string; setJob: (id: string) => void; go: (v: View) => void; onRevise: (a: App) => void;
+}) {
+  const [name, setName] = useState("");
+  const [request, setRequest] = useState("");
+  const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
+  const [submitting, setSubmitting] = useState(false);
+  const { log, status } = useJob(job, reload);
+  const app = apps.find((a) => a.id === job);
+  const running = BUSY.has(status);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request, name, agent }) });
+      setJob(r.id);
+      setName(""); setRequest("");
+      reload();
+    } catch (e) { alert(String(e)); }
+    setSubmitting(false);
+  };
+
+  return (
+    <div className="two-col new">
+      <section className="panel form">
+        <p className="eyebrow">From an idea to your home screen</p>
+        <h1>What would you like to make?</h1>
+        <p className="sub">Start with something you wish your phone could do.</p>
+        <label className="field">Give it a name <span className="muted">(optional)</span>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Little Journal" maxLength={40} />
+        </label>
+        <label className="field">Describe your app
+          <textarea rows={4} value={request} onChange={(e) => setRequest(e.target.value)}
+            placeholder="A private offline journal with a daily prompt, mood tracker, and a calendar of past entries." />
+        </label>
+        <p className="field-label">Or try one of these ideas</p>
+        <div className="chips">
+          {IDEAS.map((i) => <button key={i.label} className="chip" onClick={() => { setRequest(i.text); if (!name) setName(i.label); }}>{i.label}</button>)}
+        </div>
+        <hr />
+        <AgentPicker agent={agent} setAgent={setAgent} />
+        <p className="muted small">Uses your local assistant and its usage allowance. Takes 5 to 10 minutes.</p>
+        <button className="primary big wide" onClick={submit} disabled={!request.trim() || submitting || running}>
+          {running ? "Working on your app…" : "Create my app"} <Icon i={I.arrow} />
+        </button>
+      </section>
+
+      <aside className="side">
+        {job ? (
+          <section className="panel">
+            <div className="title-row">
+              <div className="title"><h2>{app?.name && app.name !== "New app" ? app.name : "Your new app"}</h2>
+                <div className="meta">{app?.agent === "claude" ? "Claude Code" : "Codex"}{app?.model ? ` (${app.model})` : ""} is on it</div></div>
+              <Badge status={status || app?.status || "created"} />
+            </div>
+            <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} />
+            {app && !BUSY.has(app.status) && (
+              <div className="row-end">
+                <button className="outline" onClick={() => setJob("")}>Start another</button>
+                <button className="primary" onClick={() => go("apps")}>See all apps <Icon i={I.arrow} /></button>
+              </div>
+            )}
+          </section>
+        ) : (
+          <>
+            <h2 className="pitch">You imagine it.<br />Your assistant builds it.</h2>
+            <ol className="guide">
+              <li><span className="num">1</span><div><b>Describe what you need</b><p>Tell us your idea in plain language. The more detail, the better.</p></div></li>
+              <li><span className="num">2</span><div><b>Make it feel like you</b><p>Your assistant turns your idea into a real Android app, tailored to your style and needs.</p></div></li>
+              <li><span className="num">3</span><div><b>Take it with you</b><p>Build, refine, and install it on your Android phone. Your ideas, right on your home screen.</p></div></li>
+            </ol>
+            <div className="tip"><Icon i={I.sprout} /><div><b>Start small. Make it yours.</b><p>You don’t need to be a developer. Just bring an idea, and we’ll help you turn it into something real.</p></div></div>
+          </>
+        )}
+        {app && app.status === "ready" && (
+          <div className="cards one"><AppCard app={app} tone={TONES[apps.indexOf(app) % TONES.length]} devices={devices} reload={reload} onRevise={onRevise} /></div>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+/* ---------- shell ---------- */
+function SettingsPage() {
+  const [subs, setSubs] = useState<Subscription[] | null>(null);
+  const [keys, setKeys] = useState<KeyInfo[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const checkSubs = () => { setSubs(null); api<Subscription[]>("/settings/subscriptions").then(setSubs).catch(() => setSubs([])); };
+  useEffect(() => { checkSubs(); api<{ keys: KeyInfo[] }>("/settings").then((r) => setKeys(r.keys)).catch((e) => setError(String(e))); }, []);
+  const call = async (id: string, path: string, init: RequestInit) => {
+    setBusy(id); setError("");
+    try { setKeys((await api<{ keys: KeyInfo[] }>(path, init)).keys); }
+    catch (e) { setError(String(e)); }
+    setBusy("");
+  };
+  const post = (body: unknown) => ({ method: "POST", body: JSON.stringify(body) });
+  return (
+    <>
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">Settings</p>
+          <h1>Accounts and keys</h1>
+          <p className="sub">Check who builds your apps, and give your apps the keys they need to use AI.</p>
+        </div>
+      </header>
+      <section className="panel">
+        <div className="panel-row">
+          <h2 className="panel-title">Your assistants</h2>
+          <button className="ghost" onClick={checkSubs} disabled={subs === null}>Check again</button>
+        </div>
+        <ul className="phone-list">
+          {(subs ?? []).map((s) => (
+            <li key={s.id} className="phone-row">
+              <span className="phone-icon"><Icon i={s.id === "claude" ? I.claude : I.codex} /></span>
+              <div className="grow"><b>{s.label}</b><div className="meta">{s.detail}</div></div>
+              <span className={`badge badge-${s.ok ? "ready" : "failed"}`}>{s.ok ? <><Icon i={I.check} />Signed in</> : "Not signed in"}</span>
+            </li>
+          ))}
+          {subs === null && <li className="muted small">Checking your subscriptions…</li>}
+        </ul>
+        <p className="muted small">Assistants use your ChatGPT or Claude subscription, so they never need an API key here.</p>
+      </section>
+      <section className="panel" style={{ marginTop: 20 }}>
+        <h2 className="panel-title">API keys for your apps</h2>
+        <ul className="phone-list">
+          {keys.map((k) => (
+            <li key={k.id} className="phone-row key-row">
+              <div className="grow">
+                <b>{k.label}</b>
+                {k.saved ? (
+                  <div className="meta">{k.hint} · {k.message}</div>
+                ) : (
+                  <div className="key-form">
+                    <input type="password" autoComplete="off" placeholder="Paste your key" value={drafts[k.id] ?? ""}
+                      onChange={(e) => setDrafts({ ...drafts, [k.id]: e.target.value })} />
+                    <button className="primary" disabled={!drafts[k.id]?.trim() || busy === k.id}
+                      onClick={async () => { await call(k.id, `/settings/keys/${k.id}`, { method: "PUT", body: JSON.stringify({ value: drafts[k.id] }) }); setDrafts({ ...drafts, [k.id]: "" }); }}>
+                      {busy === k.id ? "Checking…" : "Save and check"}
+                    </button>
+                  </div>
+                )}
+              </div>
+              {k.saved && (
+                <>
+                  <span className={`badge badge-${k.valid ? "ready" : "failed"}`}>{k.valid ? <><Icon i={I.check} />Works</> : "Not working"}</span>
+                  <label className="use-toggle">
+                    <input type="checkbox" checked={k.enabled} disabled={!k.valid || busy === k.id}
+                      onChange={(e) => call(k.id, `/settings/keys/${k.id}/enabled`, post({ enabled: e.target.checked }))} />
+                    Use in apps
+                  </label>
+                  <button className="ghost" disabled={busy === k.id} onClick={() => call(k.id, `/settings/keys/${k.id}/check`, post({}))}>Recheck</button>
+                  <button className="ghost" disabled={busy === k.id} onClick={() => call(k.id, `/settings/keys/${k.id}`, { method: "DELETE" })}>Remove</button>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+        {error && <p className="muted small">{error}</p>}
+        <p className="muted small">Keys are stored only on this laptop. Ticked keys are added to apps you create or change from now on, and end up inside the installed app. Use keys with a spending limit.</p>
+      </section>
+    </>
+  );
+}
+
+export default function Root() {
+  const [view, setView] = useState<View>("apps");
+  const [job, setJob] = useState("");          // id of the app currently being created or revised
+  const [revising, setRevising] = useState<App | null>(null);
+  const [inspiring, setInspiring] = useState<StoreApp | null>(null);
+  const devices = useDevices();
+  const { apps, reload } = useApps();
+  const online = devices.filter((d) => d.state === "device").length;
+  const nav: { v: View; label: string; icon: ReactNode }[] = [
+    { v: "apps", label: `My apps (${apps.length})`, icon: I.grid },
+    { v: "devices", label: `Devices (${online})`, icon: I.phone },
+    { v: "inspire", label: "Get inspired", icon: I.bulb },
+    { v: "new", label: "New app", icon: I.newfile },
+    { v: "settings", label: "Settings", icon: I.gear },
+  ];
+  return (
+    <div className="shell">
+      <nav className="sidebar">
+        <div className="logo"><span className="logo-mark">v</span>vibeApping</div>
+        {nav.map((n) => (
+          <button key={n.v} className={view === n.v ? "on" : ""} onClick={() => setView(n.v)}><Icon i={n.icon} />{n.label}</button>
+        ))}
+        <div className="grow" />
+        <div className="workspace"><span className="avatar">E</span>Personal workspace</div>
+      </nav>
+      <main>
+        {view === "apps" && <AppsPage apps={apps} devices={devices} reload={reload} go={setView} job={job} onRevise={setRevising} />}
+        {view === "devices" && <PhonesPage devices={devices} apps={apps} />}
+        {view === "inspire" && <InspirePage onPick={setInspiring} />}
+        {view === "settings" && <SettingsPage />}
+        {view === "new" && <NewAppPage apps={apps} devices={devices} reload={reload} job={job} setJob={setJob} go={setView} onRevise={setRevising} />}
+      </main>
+      {revising && (
+        <ReviseDialog app={revising} onClose={() => setRevising(null)}
+          onStarted={(id) => { setRevising(null); setJob(id); setView("new"); reload(); }} />
+      )}
+      {inspiring && (
+        <InspireDialog app={inspiring} onClose={() => setInspiring(null)}
+          onStarted={(id) => { setInspiring(null); setJob(id); setView("new"); reload(); }} />
+      )}
+    </div>
+  );
+}

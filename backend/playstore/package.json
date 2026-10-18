@@ -1,0 +1,9 @@
+{
+  "name": "vibe-playstore",
+  "private": true,
+  "type": "module",
+  "description": "Tiny CLI around google-play-scraper, called by backend/vibe/playstore.py",
+  "dependencies": {
+    "google-play-scraper": "10.1.4"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "vibe.api:app", "--port", "8000"],
+      "cwd": "backend",
+      "port": 8000
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "dashboard",
+      "port": 5173
+    }
+  ]
+}

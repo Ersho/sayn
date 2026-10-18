@@ -1,0 +1,12 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.venv/
+.expo/
+android/
+ios/
+.env
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
