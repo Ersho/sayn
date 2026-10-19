@@ -6,7 +6,7 @@ export default function Index() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.center}>
-        <Text style={styles.title}>{vibe.name || "vibeApping"}</Text>
+        <Text style={styles.title}>{vibe.name || "sayn"}</Text>
         <Text style={styles.subtitle}>Template is running.</Text>
       </View>
     </SafeAreaView>

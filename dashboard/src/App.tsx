@@ -569,7 +569,7 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
           <DeviceName d={d} />
           <div className="meta">{label} · serial {d.serial}</div>
           {d.state === "device" && (
-            <div className="meta">{mine.length ? `Apps from here: ${mine.map((a) => a.name).join(", ")}` : "No vibeApping apps installed yet"}</div>
+            <div className="meta">{mine.length ? `Apps from here: ${mine.map((a) => a.name).join(", ")}` : "No sayn apps installed yet"}</div>
           )}
         </div>
         <span className={`badge badge-${d.state === "device" ? "ready" : d.state === "offline" ? "unknown" : "failed"}`}>
@@ -807,7 +807,7 @@ export default function Root() {
   return (
     <div className="shell">
       <nav className="sidebar">
-        <div className="logo"><span className="logo-mark">v</span>vibeApping</div>
+        <div className="logo"><span className="logo-mark">s</span>sayn</div>
         {nav.map((n) => (
           <button key={n.v} className={view === n.v ? "on" : ""} onClick={() => setView(n.v)}><Icon i={n.icon} />{n.label}</button>
         ))}

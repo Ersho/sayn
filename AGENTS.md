@@ -1,6 +1,6 @@
-# vibeApping — guide for agents and contributors
+# sayn — guide for agents and contributors
 
-vibeApping turns a one-paragraph description into a signed Android release APK installed on the user's phone. A local dashboard sends the request to a FastAPI backend, the backend lets a coding agent (Codex CLI or Claude Code, the user picks per app) write an Expo app, builds it with Gradle, and installs it over USB with adb. Everything runs on one laptop (Windows, or Linux via scripts/setup.sh); the only cloud dependency is the user's ChatGPT or Claude subscription that the agent uses.
+sayn (repo and workspace folder: `vibeapping`, internal prefix `vibe`) turns a one-paragraph description into a signed Android release APK installed on the user's phone. A local dashboard sends the request to a FastAPI backend, the backend lets a coding agent (Codex CLI or Claude Code, the user picks per app) write an Expo app, builds it with Gradle, and installs it over USB with adb. Everything runs on one laptop (Windows, or Linux via scripts/setup.sh); the only cloud dependency is the user's ChatGPT or Claude subscription that the agent uses.
 
 The file you are reading describes **this repository**. The file `template/AGENTS.md` is different: it is copied into every generated app and tells Codex how to behave inside that app. Do not merge the two.
 

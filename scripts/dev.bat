@@ -10,8 +10,8 @@ if not exist "%ROOT%\dashboard\node_modules" (
     popd
 )
 
-start "vibeApping backend" /D "%ROOT%\backend" cmd /k uv run uvicorn vibe.api:app --port 8000
-start "vibeApping dashboard" /D "%ROOT%\dashboard" cmd /k npm run dev
+start "sayn backend" /D "%ROOT%\backend" cmd /k uv run uvicorn vibe.api:app --port 8000
+start "sayn dashboard" /D "%ROOT%\dashboard" cmd /k npm run dev
 
 echo Backend:   http://localhost:8000
 echo Dashboard: http://localhost:5173

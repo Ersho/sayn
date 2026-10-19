@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# vibeApping setup for Linux — idempotent, per-user, no sudo needed (except for the udev rule, see the end).
+# sayn setup for Linux — idempotent, per-user, no sudo needed (except for the udev rule, see the end).
 #   bash scripts/setup.sh
 # Installs: JDK 17, Android SDK (platform-tools, android-36, build-tools 36, cmake 4.1.2), uv + Python 3.12,
 # npm dependencies, the release keystore and the JADX jar REA needs. Writes ~/vibeapping/env.sh with the env vars.
@@ -131,7 +131,7 @@ ok 'written'
 step 'adb devices'
 adb devices -l || true
 echo
-echo "Done. Start vibeApping with:  bash scripts/dev.sh"
+echo "Done. Start sayn with:  bash scripts/dev.sh"
 echo "If your phone is missing or shows 'no permissions', install the udev rules once (Debian/Ubuntu):"
 echo "  sudo apt install android-sdk-platform-tools-common && sudo usermod -aG plugdev \$USER"
 echo "then log out and in, replug the phone and accept the USB debugging prompt on it."

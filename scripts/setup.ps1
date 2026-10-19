@@ -1,4 +1,4 @@
-# vibeApping setup — idempotent. Run from any directory:
+# sayn setup — idempotent. Run from any directory:
 #   powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is very slow with the progress bar
