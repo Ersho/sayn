@@ -1,8 +1,14 @@
 <h1 align="center">sayn</h1>
 <p align="center"><b>Subscriptions Are All You Need.</b><br>
 
-Describe an app, or pick one from the Play Store,<br>
-and a coding agent builds it and installs it on your phone. Free, open source, runs on your laptop.</p>
+See an app you like, click <b>Make my own</b>, and five minutes later your own version is on your phone. No ads, no paywall, no app store. Free, open source, runs on your laptop.</p>
+
+<p align="center"><img src="docs/how-it-works.svg" alt="1. Pick a Play Store app and click Make my own. 2. Your coding agent writes, builds and installs it from your laptop. 3. Your own version, without ads or subscription, opens on your phone." width="960"></p>
+
+Found a habit tracker that wants $6.99 a month? A flashlight with three ad banners? A to-do app
+that almost fits but not quite? Pick it in sayn, write one line about what you want different,
+and your coding agent builds your own version and installs it on the phone plugged into your
+laptop. Don't need a template? Just describe the app in a sentence.
 
 ---
 
@@ -22,22 +28,6 @@ Codex CLI, billed to the Claude or ChatGPT plan you already pay for. sayn is the
 
 Everything runs on your machine. No cloud sandbox, no account, no API key, no per-app cost. The only
 thing that leaves your laptop is the conversation your agent already has with its provider.
-
-## How it works
-
-```
- dashboard (Vite + React)  ──HTTP/SSE──▶  backend (FastAPI)
-                                              │
-            1. copy template/ → ~/vibeapping/apps/<id>   (Expo SDK 58, expo-router, TypeScript)
-            2. codex exec  |  claude -p      with the create / revise / fix prompt
-            3. tsc → expo prebuild → gradlew assembleRelease   (agent fixes build errors, up to 5 rounds)
-            4. adb install -r → launch → screenshot
-```
-
-Builds are release builds signed with a keystore generated once on your machine, so apps stay
-installed, update in place and look like any other app. They all get the launcher label `my:<name>`,
-so typing `my:` in the phone's app search lists everything sayn made. Each app is a normal Expo
-project and a normal git repository: open it in any editor or keep iterating from the dashboard.
 
 ## Quick start
 
@@ -78,6 +68,22 @@ on Debian/Ubuntu) and replug it.
 Then open <http://localhost:5173>, plug in the phone, accept the USB debugging prompt on it, and
 create your first app. The very first build downloads Gradle and compiles the native code (about
 10 minutes); after that an app takes 5 to 7 minutes end to end, most of it in Gradle.
+
+## How it works
+
+```
+ dashboard (Vite + React)  ──HTTP/SSE──▶  backend (FastAPI)
+                                              │
+            1. copy template/ → ~/vibeapping/apps/<id>   (Expo SDK 58, expo-router, TypeScript)
+            2. codex exec  |  claude -p      with the create / revise / fix prompt
+            3. tsc → expo prebuild → gradlew assembleRelease   (agent fixes build errors, up to 5 rounds)
+            4. adb install -r → launch → screenshot
+```
+
+Builds are release builds signed with a keystore generated once on your machine, so apps stay
+installed, update in place and look like any other app. They all get the launcher label `my:<name>`,
+so typing `my:` in the phone's app search lists everything sayn made. Each app is a normal Expo
+project and a normal git repository: open it in any editor or keep iterating from the dashboard.
 
 ## Configuration
 
