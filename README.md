@@ -1,12 +1,14 @@
 <h1 align="center">sayn</h1>
 <p align="center"><b>Subscriptions Are All You Need.</b><br>
-Describe an app, or pick one from the Play Store. A few minutes later it is installed on your phone.</p>
+Your Claude or ChatGPT subscription, that is. Describe an app, or pick one from the Play Store,<br>
+and a coding agent builds it and installs it on your phone. Free, open source, runs on your laptop.</p>
 
 ---
 
-You already pay for Claude or ChatGPT. That subscription is a developer who never sleeps, and most
-of the apps on your phone are small enough for it to build in one go. sayn (say it "sane") is the
-factory around it:
+sayn costs nothing and has no accounts. It uses the coding agent you already have, Claude Code or
+Codex CLI, billed to the Claude or ChatGPT plan you already pay for. That plan is a developer who
+never sleeps, and most apps on your phone are small enough for it to build in one go. sayn (say it
+"sane") is the factory around it:
 
 - **Describe it.** One paragraph in a local dashboard. Codex CLI or Claude Code writes a real Expo /
   React Native app, your laptop compiles a signed release APK, adb installs and launches it on the
