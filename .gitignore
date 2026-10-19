@@ -10,3 +10,22 @@ ios/
 .claude/settings.local.json
 .DS_Store
 Thumbs.db
+
+# secrets and runtime data (normally live in ~/vibeapping, outside the repo)
+.env.*
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+keys.json
+config.json
+phones.json
+env.sh
+
+# misc
+*.log
+.vscode/
+.idea/
+.claude/*
+!.claude/launch.json
