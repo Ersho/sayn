@@ -14,8 +14,8 @@ Codex CLI, billed to the Claude or ChatGPT plan you already pay for. sayn is the
   phone on your desk. About 5 minutes.
 - **Or search the Play Store and make your own.** Browse the top charts or search any app, pick it,
   add your notes. The agent builds your version from the store listing, screenshots and reviews. Tick
-  one box and it also reads the real APK, decompiled through [REA](https://github.com/morluto/rea),
-  so it learns how the original works before writing its own. No ads, no in-app purchases, no
+  one box and [REA](https://github.com/morluto/rea) analyses the real APK into a feature spec
+  (screens, flows, data) that the agent builds from. It never copies the original's code. No ads, no in-app purchases, no
   subscription, and it is yours. Names, branding, assets and code are never copied.
 - **Change it any time.** Every app has a text box for the next change. The agent edits the code, the
   version bumps, the app rebuilds and reinstalls. Each run is a git commit inside the app folder.
