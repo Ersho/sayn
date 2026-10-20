@@ -1,9 +1,10 @@
 """FastAPI app. Run: uv run uvicorn vibe.api:app --port 8000"""
 import asyncio
 import json
+import os
 import re
-import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -73,7 +74,19 @@ class KeyToggle(BaseModel):
 
 @app.get("/settings")
 def get_settings():
-    return {"keys": settings.list_keys(), "ios": {"available": ios.available(), "team": ios.team()}}
+    return {"keys": settings.list_keys(), "android": _android_sdk(),
+            "ios": {"mac": sys.platform == "darwin", "available": ios.ready(), "team": ios.team()}}
+
+
+def _android_sdk() -> bool:
+    # setup.sh --no-android (macOS, iPhone only) leaves the SDK out.
+    return (Path(os.environ.get("ANDROID_HOME", "")) / "platforms" / "android-36").is_dir()
+
+
+@app.get("/settings/ios/checks")
+def get_ios_checks():
+    # Separate from /settings: devicectl takes a few seconds and only the iPhone panel needs it.
+    return {"checks": ios.checks(), "teams": ios.teams()}
 
 
 class IosTeam(BaseModel):
@@ -178,9 +191,11 @@ def post_app(body: NewApp):
         raise HTTPException(400, "Choose Android or iOS.")
     if body.ios_target not in {"device", "simulator"}:
         raise HTTPException(400, "Choose an iOS device or Simulator.")
+    if body.platform == "android" and not _android_sdk():
+        raise HTTPException(400, "Android builds need the Android SDK. Run scripts/setup.sh without --no-android, then restart sayn.")
     if body.platform == "ios":
-        if not ios.available() or not shutil.which("pod"):
-            raise HTTPException(400, "iOS builds require macOS, full Xcode, and CocoaPods. See the iOS setup guide.")
+        if not ios.ready():
+            raise HTTPException(400, "iOS builds require macOS, full Xcode, and CocoaPods. See Settings → iPhone and iPad.")
         if body.ios_target == "device" and not ios.team():
             raise HTTPException(400, "Set your Apple signing team in Settings first.")
         if body.ios_device and not any(d["serial"] == body.ios_device and d["platform"] == "ios"

@@ -63,7 +63,9 @@ bash scripts/dev.sh
 ```
 
 On Apple silicon, install Rosetta 2 once for the Android native build tools:
-`softwareupdate --install-rosetta --agree-to-license`. Setup uses a native JDK 17 and defaults to
+`softwareupdate --install-rosetta --agree-to-license`. Without Rosetta, setup skips Android and finishes
+for iPhone/iPad. On a Mac that only builds iPhone/iPad apps, run `bash scripts/setup.sh --no-android`
+to skip the Android SDK entirely. Setup uses a native JDK 17 and defaults to
 `~/Library/Android/sdk` on macOS (`~/Android/Sdk` on Linux); set `ANDROID_HOME` before setup to use
 an existing SDK. Homebrew and Android Studio are not required.
 
@@ -77,14 +79,26 @@ The very first Android build downloads Gradle and compiles the native code (abou
 
 ## iPhone and iPad (macOS)
 
+Optional: skip this section if you only build Android apps. Windows and Linux never need any of it.
 The dashboard and coding agent run on your Mac, just like the Android workflow. iOS builds use
 local Xcode release builds and Apple development signing; no cloud build service is needed.
 
-1. Install full Xcode, launch it once to finish setup, and select it in Xcode → Settings → Locations → Command Line Tools.
-2. Install [CocoaPods](https://guides.cocoapods.org/using/getting-started) so `pod` is on your terminal's PATH.
-3. Add your Apple account in Xcode → Settings → Accounts. In sayn's Settings, save its ten-character Apple team ID (or set `VIBE_IOS_TEAM` before starting sayn).
-4. Connect and unlock your iPhone/iPad, trust the Mac, and enable Developer Mode in the device's Privacy & Security settings.
-5. In New app or Make my own version, choose **iPhone / iPad**, select the device, then generate and install the app.
+You don't need to remember the steps. `setup.sh` ends with this checklist on a Mac, and the dashboard
+shows the same list under **Settings → iPhone and iPad** with a **Check again** button. Each step
+shows `ok` or the exact next step. Do them in this order:
+
+| # | Checkpoint | What to do |
+|---|---|---|
+| 1 | Xcode installed and set up | Install Xcode from the App Store, open it once to finish setup, then select it in Xcode → Settings → Locations → Command Line Tools. |
+| 2 | CocoaPods installed | `brew install cocoapods` (or `sudo gem install cocoapods`), then restart sayn. |
+| 3 | Apple account added to Xcode | Xcode → Settings → Accounts → + → sign in with your Apple ID. A free account works. |
+| 4 | Signing team chosen in sayn | In sayn's Settings, pick the team Xcode found (or type its 10-character ID, or set `VIBE_IOS_TEAM`). |
+| 5 | iPhone or iPad connected | Plug it in with a cable and unlock it. |
+| 6 | It trusts this Mac | Tap **Trust** on the phone and enter its passcode. |
+| 7 | Developer Mode on | On the phone: Settings → Privacy & Security → Developer Mode, then restart. If it's missing, open Xcode → Window → Devices and Simulators with the phone plugged in, then look again. |
+
+Steps 1 and 2 are enough for the iOS Simulator. After that, choose **iPhone / iPad** in New app or Make my own version, select the device, then generate and install the app.
+Certificates and provisioning profiles are created automatically during the first device build.
 
 If iOS blocks the first launch, trust your developer profile in Settings → General → VPN & Device Management, then install again.
 

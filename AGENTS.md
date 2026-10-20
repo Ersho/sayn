@@ -27,7 +27,7 @@ backend/vibe/
   playstore.py         Play Store browsing (top charts, search, details) + the per-app inspiration/ folder (listing, screenshots, APK)
 backend/playstore/     tiny Node CLI around google-play-scraper (playstore.mjs); playstore.py shells out to it
   build.py             tsc → expo prebuild → Gradle or Xcode, agent fix loop, revise, permissions
-  ios.py               Xcode CLI device discovery, Apple team selection, devicectl / simctl install and launch
+  ios.py               Xcode CLI device discovery, Apple team selection, setup checkpoints, devicectl / simctl install and launch
   devices.py           adbutils wrapper: list (+ phones.json history), install, launch, screenshot
 dashboard/             Vite + React + TypeScript single-page UI (src/App.tsx, src/index.css)
                        sidebar: My apps, Devices, Get inspired, New app, Settings
@@ -138,6 +138,8 @@ claude.cmd -p --output-format stream-json --verbose --permission-mode acceptEdit
 
 - App metadata defaults to `platform="android"` for old apps. New iOS apps also record `ios_target` (`device` or `simulator`) and an optional build destination identifier. Device and Simulator artifacts must not be mixed.
 - iOS builds require macOS, full Xcode selected with xcode-select, and CocoaPods on PATH. `VIBE_IOS_TEAM` or `config.json`'s `ios_team` provides a user-selected team; never hardcode a contributor's team or device IDs.
+- `ios.checks()` is the single list of iPhone setup checkpoints (Xcode, CocoaPods, Apple account, team, connected, trusted, Developer Mode). `setup.sh` prints it with `python -m vibe.ios`, and the dashboard shows it through `GET /settings/ios/checks`. Add or reword steps there only. Teams are read from Xcode's preferences plist for the dropdown; the user still saves one. `ios.ready()` (Xcode + CocoaPods) gates the iPhone option.
+- On macOS, Android is optional: `setup.sh --no-android`, or a missing Rosetta on Apple silicon, skips the Android SDK. `/settings` reports `android` and the dashboard disables that option.
 - Build optimized local `.app` bundles using Apple development signing for physical devices, and unsigned Simulator bundles. The pipeline uses `devicectl` JSON files and `simctl` for deployment. Physical screenshots are not provided by devicectl.
 - Keep Node requirements in `scripts/check-node.mjs`, README, and package metadata consistent with the pinned Expo / React Native versions. Explicitly install development dependencies: Vite and TypeScript are required at runtime by this build tool.
 - Resolve symlinked npm / Expo cache paths before passing them as writable directories to Codex. Keep its workspace sandbox enabled.

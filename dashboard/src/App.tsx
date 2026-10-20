@@ -21,6 +21,8 @@ type StoreDetails = StoreApp & { description: string; screenshots: string[]; url
 type View = "apps" | "devices" | "inspire" | "new" | "settings";
 type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null; enabled: boolean };
 type Subscription = { id: string; label: string; ok: boolean; detail: string };
+type IosCheck = { id: string; label: string; ok: boolean; hint: string };
+type IosTeam = { id: string; name: string; personal: boolean };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...init });
@@ -347,14 +349,21 @@ function AgentPicker({ agent, setAgent }: { agent: keyof typeof AGENTS; setAgent
 function TargetPicker({ target, setTarget, devices }: {
   target: BuildTarget; setTarget: (target: BuildTarget) => void; devices: Device[];
 }) {
-  const [iosAvailable, setIosAvailable] = useState(false);
-  useEffect(() => { api<{ ios: { available: boolean } }>("/settings").then((s) => setIosAvailable(s.ios.available)).catch(() => {}); }, []);
+  const [hosts, setHosts] = useState({ android: true, ios: false, mac: false });
+  useEffect(() => {
+    api<{ android?: boolean; ios: { available: boolean; mac?: boolean } }>("/settings").then((s) => {
+      const android = s.android !== false; // older backends do not report it
+      setHosts({ android, ios: s.ios.available, mac: !!s.ios.mac });
+      // An iPhone-only Mac (setup.sh --no-android) starts on iPhone / iPad.
+      if (!android && s.ios.available && target.platform === "android") setTarget({ ...target, platform: "ios" });
+    }).catch(() => {});
+  }, []);
   const eligible = devices.filter((d) => d.platform === "ios" && d.kind === target.ios_target && d.state === "device");
   return <>
     <label className="field">Build for
       <select aria-label="Build for" value={target.platform} onChange={(e) => setTarget({ ...target, platform: e.target.value as Platform, ios_target: "device", ios_device: "" })}>
-        <option value="android">Android</option>
-        <option value="ios" disabled={!iosAvailable}>iPhone / iPad{!iosAvailable ? " (requires macOS and Xcode)" : ""}</option>
+        <option value="android" disabled={!hosts.android}>Android{!hosts.android ? " (not set up on this computer)" : ""}</option>
+        <option value="ios" disabled={!hosts.ios}>iPhone / iPad{hosts.ios ? "" : hosts.mac ? " (finish setup in Settings)" : " (requires a Mac)"}</option>
       </select>
     </label>
     {target.platform === "ios" && <>
@@ -539,8 +548,7 @@ function AppsPage({ apps, devices, reload, go, job, onRevise }: {
       <header className="page-head">
         <div>
           <p className="eyebrow">Your personal app studio</p>
-          <h1>Small apps. Big possibilities.</h1>
-          <p className="sub">Your ideas, made real. All in one place.</p>
+          <h1>My apps</h1>
         </div>
         <button className="primary big" onClick={() => go("new")}><Icon i={I.plus} />New app</button>
       </header>
@@ -752,15 +760,18 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
 
 /* ---------- shell ---------- */
 function SettingsPage() {
-  const [iosSettings, setIosSettings] = useState<{ available: boolean; team: string } | null>(null);
+  const [iosSettings, setIosSettings] = useState<{ available: boolean; mac: boolean; team: string } | null>(null);
   const [team, setTeam] = useState("");
+  const [iosChecks, setIosChecks] = useState<{ checks: IosCheck[]; teams: IosTeam[] } | null>(null);
+  const checkIos = () => { setIosChecks(null); api<{ checks: IosCheck[]; teams: IosTeam[] }>("/settings/ios/checks").then(setIosChecks).catch(() => setIosChecks({ checks: [], teams: [] })); };
+  useEffect(() => { if (iosSettings?.mac) checkIos(); }, [iosSettings?.mac]);
   const [subs, setSubs] = useState<Subscription[] | null>(null);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const checkSubs = () => { setSubs(null); api<Subscription[]>("/settings/subscriptions").then(setSubs).catch(() => setSubs([])); };
-  useEffect(() => { checkSubs(); api<{ keys: KeyInfo[]; ios: { available: boolean; team: string } }>("/settings").then((r) => { setKeys(r.keys); setIosSettings(r.ios); setTeam(r.ios.team); }).catch((e) => setError(String(e))); }, []);
+  useEffect(() => { checkSubs(); api<{ keys: KeyInfo[]; ios: { available: boolean; mac: boolean; team: string } }>("/settings").then((r) => { setKeys(r.keys); setIosSettings(r.ios); setTeam(r.ios.team); }).catch((e) => setError(String(e))); }, []);
   const call = async (id: string, path: string, init: RequestInit) => {
     setBusy(id); setError("");
     try { setKeys((await api<{ keys: KeyInfo[] }>(path, init)).keys); }
@@ -794,18 +805,35 @@ function SettingsPage() {
         </ul>
         <p className="muted small">Assistants use your ChatGPT or Claude subscription, so they never need an API key here.</p>
       </section>
-      {iosSettings?.available && <section className="panel" style={{ marginTop: 20 }}>
-        <h2 className="panel-title">iPhone and iPad signing</h2>
-        <p className="sub">Use the team from your Apple account in Xcode. A Personal Team works for local device testing; its installs expire and need rebuilding.</p>
+      {iosSettings?.mac && <section className="panel" style={{ marginTop: 20 }}>
+        <div className="panel-row">
+          <h2 className="panel-title">iPhone and iPad</h2>
+          <button className="ghost" onClick={checkIos} disabled={iosChecks === null}>Check again</button>
+        </div>
+        <p className="sub">Only needed for iPhone and iPad apps. Work through the steps in order; the iOS Simulator needs only the first two.</p>
+        <ul className="phone-list">
+          {(iosChecks?.checks ?? []).map((c, i) => (
+            <li key={c.id} className="phone-row">
+              <span className="phone-icon">{i + 1}</span>
+              <div className="grow"><b>{c.label}</b>{!c.ok && <div className="meta">{c.hint}</div>}</div>
+              <span className={`badge badge-${c.ok ? "ready" : "failed"}`}>{c.ok ? <><Icon i={I.check} />Done</> : "To do"}</span>
+            </li>
+          ))}
+          {iosChecks === null && <li className="muted small">Checking this Mac and your iPhone…</li>}
+        </ul>
         <label className="field">Apple team ID
-          <input value={team} maxLength={10} onChange={(e) => setTeam(e.target.value.toUpperCase())} placeholder="Your 10-character team ID" />
+          <input value={team} maxLength={10} list="ios-teams" onChange={(e) => setTeam(e.target.value.toUpperCase())} placeholder="Your 10-character team ID" />
+          <datalist id="ios-teams">
+            {(iosChecks?.teams ?? []).map((t) => <option key={t.id} value={t.id}>{t.name}{t.personal ? " (Personal Team)" : ""}</option>)}
+          </datalist>
         </label>
         <button className="outline" disabled={busy === "ios"} onClick={async () => {
           setBusy("ios"); setError("");
-          try { const result = await api<{ team: string }>("/settings/ios", { method: "PUT", body: JSON.stringify({ team }) }); setTeam(result.team); }
+          try { const result = await api<{ team: string }>("/settings/ios", { method: "PUT", body: JSON.stringify({ team }) }); setTeam(result.team); checkIos(); }
           catch (e) { setError(String(e)); }
           setBusy("");
         }}>Save signing team</button>
+        <p className="muted small">A free Personal Team works; its installs expire after seven days and need rebuilding. If the first launch is blocked, trust your profile on the iPhone in Settings → General → VPN &amp; Device Management.</p>
       </section>}
       <section className="panel" style={{ marginTop: 20 }}>
         <h2 className="panel-title">API keys for your apps</h2>
