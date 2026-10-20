@@ -31,8 +31,8 @@ thing that leaves your laptop is the conversation your agent already has with it
 
 ## Quick start
 
-You need a Windows or Linux x64 machine, [Node 20+](https://nodejs.org), an Android phone with USB
-debugging on, and at least one coding agent signed in:
+You need a Mac (Apple silicon or Intel), Windows x64 or Linux x64 machine, [Node 20+](https://nodejs.org),
+an Android phone with USB debugging on, and at least one coding agent signed in:
 
 ```bash
 npm i -g @openai/codex && codex login                      # Codex CLI (ChatGPT plan)
@@ -53,7 +53,7 @@ scripts\dev.ps1                                               # in a new termina
 
 Windows needs long paths enabled once; the script prints the exact admin command if they are not.
 
-**Linux**
+**macOS / Linux**
 
 ```bash
 git clone https://github.com/Ersho/sayn.git
@@ -62,7 +62,13 @@ bash scripts/setup.sh
 bash scripts/dev.sh
 ```
 
-If `adb devices` does not list your phone, install the udev rules (`android-sdk-platform-tools-common`
+On Apple silicon, install Rosetta 2 once for the Android native build tools:
+`softwareupdate --install-rosetta --agree-to-license`. Setup uses a native JDK 17 and defaults to
+`~/Library/Android/sdk` on macOS (`~/Android/Sdk` on Linux); set `ANDROID_HOME` before setup to use
+an existing SDK. Homebrew and Android Studio are not required.
+
+Unlock the phone and accept its USB debugging prompt. macOS needs no USB driver. On Linux, if
+`adb devices` does not list your phone, install the udev rules (`android-sdk-platform-tools-common`
 on Debian/Ubuntu) and replug it.
 
 Then open <http://localhost:5173>, plug in the phone, accept the USB debugging prompt on it, and

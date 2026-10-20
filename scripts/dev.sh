@@ -12,12 +12,15 @@ fi
 
 (cd "$ROOT/backend" && exec uv run uvicorn vibe.api:app --port 8000) &
 BACKEND=$!
-(cd "$ROOT/dashboard" && exec npm run dev) &
+(cd "$ROOT/dashboard" && exec node node_modules/vite/bin/vite.js) &
 DASHBOARD=$!
-stop() { kill "$BACKEND" "$DASHBOARD" 2>/dev/null; wait "$BACKEND" "$DASHBOARD" 2>/dev/null || true; }
-trap 'stop; exit 0' INT TERM
+stop() { kill "$BACKEND" "$DASHBOARD" 2>/dev/null || true; wait "$BACKEND" "$DASHBOARD" 2>/dev/null || true; }
+trap stop EXIT
+trap 'exit 0' INT TERM
 
 echo "Backend:   http://localhost:8000"
 echo "Dashboard: http://localhost:5173  (Ctrl+C to stop both)"
-wait -n "$BACKEND" "$DASHBOARD" || true
-stop
+# wait -n requires Bash 4.3; macOS ships Bash 3.2. Stop both if either exits.
+while kill -0 "$BACKEND" 2>/dev/null && kill -0 "$DASHBOARD" 2>/dev/null; do
+    sleep 1
+done

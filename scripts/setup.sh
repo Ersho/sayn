@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
-# sayn setup for Linux — idempotent, per-user, no sudo needed (except for the udev rule, see the end).
+# sayn setup for macOS and Linux — idempotent, per-user, no sudo needed.
 #   bash scripts/setup.sh
 # Installs: JDK 17, Android SDK (platform-tools, android-36, build-tools 36, cmake 4.1.2), uv + Python 3.12,
 # npm dependencies, the release keystore and the JADX jar REA needs. Writes ~/vibeapping/env.sh with the env vars.
 set -euo pipefail
 
-JDK_TAR='https://aka.ms/download-jdk/microsoft-jdk-17.0.20.1-linux-x64.tar.gz'
-CMDLINE_TOOLS_ZIP='https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip'
+# macOS ships Bash 3.2; keep this script compatible with it.
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+case "$OS/$ARCH" in
+    Linux/x86_64) JDK_PLATFORM='linux-x64'; SDK_PLATFORM='linux'; SDK_DEFAULT="$HOME/Android/Sdk" ;;
+    Darwin/arm64) JDK_PLATFORM='macos-aarch64'; SDK_PLATFORM='mac_arm64'; SDK_DEFAULT="$HOME/Library/Android/sdk" ;;
+    Darwin/x86_64) JDK_PLATFORM='macos-x64'; SDK_PLATFORM='mac_x86_64'; SDK_DEFAULT="$HOME/Library/Android/sdk" ;;
+    *) echo "Unsupported platform: $OS/$ARCH (use macOS arm64/x64 or Linux x64)." >&2; exit 1 ;;
+esac
+JDK_TAR="https://aka.ms/download-jdk/microsoft-jdk-17.0.20.1-$JDK_PLATFORM.tar.gz"
+CMDLINE_TOOLS_ZIP="https://dl.google.com/android/repository/commandlinetools-$SDK_PLATFORM-15859902_latest.zip"
 JADX_JAR_URL='https://github.com/1013503897/jadx-headless-mcp/releases/download/v0.7.1/jadx-headless-mcp-0.7.1-all.jar'
 REA_VERSION='6.7.0'                                  # keep in sync with REA in backend/vibe/playstore.py
 PACKAGES='platform-tools platforms;android-36 build-tools;36.0.0 cmake;4.1.2'
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="$HOME/vibeapping"
-ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+ANDROID_HOME="${ANDROID_HOME:-$SDK_DEFAULT}"
 JDK_ROOT="$HOME/.local/share/vibeapping/jdk"
+[ "$OS" != Darwin ] || JDK_ROOT="$JDK_ROOT/$JDK_PLATFORM"
 ENV_FILE="$WORKSPACE/env.sh"
 
 step() { printf '\n\033[36m== %s\033[0m\n' "$*"; }
@@ -28,17 +38,33 @@ export PATH="$HOME/.local/bin:$PATH"
 step 'Basics'
 for t in curl unzip tar git; do need "$t"; done
 need node
+need npm
 [ "$(node -v | sed 's/^v\([0-9]*\).*/\1/')" -ge 20 ] || die "Node 20+ is required (found $(node -v)). https://nodejs.org or your package manager."
 ok "node $(node -v), npm $(npm -v)"
+if [ "$OS/$ARCH" = Darwin/arm64 ] && ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
+    die 'Android native build tools need Rosetta 2. Install it with: softwareupdate --install-rosetta --agree-to-license, then re-run.'
+fi
+# Unique temporary downloads, cleaned up on both success and failure.
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
 
 step 'JDK 17'
-JAVA_HOME="$(ls -d "$JDK_ROOT"/jdk-17* 2>/dev/null | head -1 || true)"
+jdk_home() {
+    local root
+    root="$(ls -d "$JDK_ROOT"/jdk-17* 2>/dev/null | head -1 || true)"
+    if [ -n "$root" ]; then
+        if [ "$OS" = Darwin ]; then root="$root/Contents/Home"; fi
+        [ ! -x "$root/bin/java" ] || printf '%s\n' "$root"
+    fi
+}
+JAVA_HOME="$(jdk_home)"
 if [ -z "$JAVA_HOME" ]; then
     mkdir -p "$JDK_ROOT"
     echo "   downloading $JDK_TAR"
-    curl -fsSL "$JDK_TAR" -o /tmp/jdk17.tar.gz
-    tar -xzf /tmp/jdk17.tar.gz -C "$JDK_ROOT" && rm /tmp/jdk17.tar.gz
-    JAVA_HOME="$(ls -d "$JDK_ROOT"/jdk-17* | head -1)"
+    curl -fsSL "$JDK_TAR" -o "$TMP/jdk17.tar.gz"
+    tar -xzf "$TMP/jdk17.tar.gz" -C "$JDK_ROOT"
+    JAVA_HOME="$(jdk_home)"
+    [ -n "$JAVA_HOME" ] || die "Could not find JDK 17 in $JDK_ROOT"
     ok 'JDK 17 installed'
 fi
 export JAVA_HOME PATH="$JAVA_HOME/bin:$PATH"
@@ -49,10 +75,9 @@ SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 if [ ! -x "$SDKMANAGER" ]; then
     mkdir -p "$ANDROID_HOME/cmdline-tools"
     echo "   downloading $CMDLINE_TOOLS_ZIP"
-    curl -fsSL "$CMDLINE_TOOLS_ZIP" -o /tmp/cmdline-tools.zip
-    rm -rf /tmp/cmdline-tools-extract && unzip -q /tmp/cmdline-tools.zip -d /tmp/cmdline-tools-extract
-    mv /tmp/cmdline-tools-extract/cmdline-tools "$ANDROID_HOME/cmdline-tools/latest"
-    rm -rf /tmp/cmdline-tools.zip /tmp/cmdline-tools-extract
+    curl -fsSL "$CMDLINE_TOOLS_ZIP" -o "$TMP/cmdline-tools.zip"
+    unzip -q "$TMP/cmdline-tools.zip" -d "$TMP/cmdline-tools"
+    mv "$TMP/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
     ok 'cmdline-tools installed'
 fi
 export ANDROID_HOME ANDROID_SDK_ROOT="$ANDROID_HOME" PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
@@ -95,7 +120,8 @@ else echo "   claude not found (optional): npm i -g @anthropic-ai/claude-code &&
 step "Workspace $WORKSPACE"
 CONFIG="$WORKSPACE/config.json"; JKS="$WORKSPACE/vibe.jks"
 if [ ! -f "$CONFIG" ]; then
-    pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)"
+    # Avoid a tr | head pipeline: pipefail treats its expected SIGPIPE as a setup failure.
+    pw="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("hex"))')"
     printf '{\n  "keystore": "%s",\n  "alias": "vibe",\n  "password": "%s"\n}\n' "$JKS" "$pw" > "$CONFIG"
     ok 'wrote config.json'
 fi
@@ -120,10 +146,10 @@ ok "rea-agents@$REA_VERSION + $JADX_JAR"
 step "Environment file $ENV_FILE"
 {
     echo "# Generated by scripts/setup.sh. Sourced by scripts/dev.sh; add 'source $ENV_FILE' to your shell rc to use the tools directly."
-    echo "export JAVA_HOME=\"$JAVA_HOME\""
-    echo "export ANDROID_HOME=\"$ANDROID_HOME\""
-    echo "export ANDROID_SDK_ROOT=\"$ANDROID_HOME\""
-    echo "export REA_JADX_MCP_JAR=\"$JADX_JAR\""
+    printf 'export JAVA_HOME=%q\n' "$JAVA_HOME"
+    printf 'export ANDROID_HOME=%q\n' "$ANDROID_HOME"
+    printf 'export ANDROID_SDK_ROOT=%q\n' "$ANDROID_HOME"
+    printf 'export REA_JADX_MCP_JAR=%q\n' "$JADX_JAR"
     echo 'export PATH="$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/cmdline-tools/latest/bin:$HOME/.local/bin:$PATH"'
 } > "$ENV_FILE"
 ok 'written'
@@ -132,6 +158,10 @@ step 'adb devices'
 adb devices -l || true
 echo
 echo "Done. Start sayn with:  bash scripts/dev.sh"
-echo "If your phone is missing or shows 'no permissions', install the udev rules once (Debian/Ubuntu):"
-echo "  sudo apt install android-sdk-platform-tools-common && sudo usermod -aG plugdev \$USER"
-echo "then log out and in, replug the phone and accept the USB debugging prompt on it."
+if [ "$OS" = Linux ]; then
+    echo "If your phone is missing or shows 'no permissions', install the udev rules once (Debian/Ubuntu):"
+    echo "  sudo apt install android-sdk-platform-tools-common && sudo usermod -aG plugdev \$USER"
+    echo "then log out and in, replug the phone and accept the USB debugging prompt on it."
+else
+    echo "Unlock your phone and accept the USB debugging prompt. macOS needs no USB driver."
+fi

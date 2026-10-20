@@ -1,6 +1,6 @@
 # sayn — guide for agents and contributors
 
-sayn (repo and workspace folder: `vibeapping`, internal prefix `vibe`) turns a one-paragraph description into a signed Android release APK installed on the user's phone. A local dashboard sends the request to a FastAPI backend, the backend lets a coding agent (Codex CLI or Claude Code, the user picks per app) write an Expo app, builds it with Gradle, and installs it over USB with adb. Everything runs on one laptop (Windows, or Linux via scripts/setup.sh); the only cloud dependency is the user's ChatGPT or Claude subscription that the agent uses.
+sayn (repo and workspace folder: `vibeapping`, internal prefix `vibe`) turns a one-paragraph description into a signed Android release APK installed on the user's phone. A local dashboard sends the request to a FastAPI backend, the backend lets a coding agent (Codex CLI or Claude Code, the user picks per app) write an Expo app, builds it with Gradle, and installs it over USB with adb. Everything runs on one laptop (Windows, macOS or Linux via scripts/setup.sh); the only cloud dependency is the user's ChatGPT or Claude subscription that the agent uses.
 
 The file you are reading describes **this repository**. The file `template/AGENTS.md` is different: it is copied into every generated app and tells Codex how to behave inside that app. Do not merge the two.
 
@@ -8,10 +8,10 @@ The file you are reading describes **this repository**. The file `template/AGENT
 
 ```
 scripts/setup.ps1      one-shot, idempotent toolchain setup for Windows (run first on a new machine); setup.bat wraps it
-scripts/setup.sh       the same for Linux; writes ~/vibeapping/env.sh (JAVA_HOME, ANDROID_HOME, PATH) that dev.sh sources
+scripts/setup.sh       the same for macOS / Linux; writes ~/vibeapping/env.sh (JAVA_HOME, ANDROID_HOME, PATH) that dev.sh sources
 scripts/dev.ps1        starts backend (:8000) and dashboard (:5173) together; Ctrl+C stops both
 scripts/dev.bat        same for CMD: opens each server in its own window
-scripts/dev.sh         same for Linux
+scripts/dev.sh         same for macOS / Linux
 template/              Expo app that every generated app starts from
   app/                 one screen (index.tsx) + Stack layout
   plugins/withVibeSigning.js   config plugin: release build signs with the vibe keystore
@@ -124,3 +124,9 @@ claude.cmd -p --output-format stream-json --verbose --permission-mode acceptEdit
 - Anything that changes how an agent is called belongs in `codex.py` / `claude.py`; prompts live in `codex.py` and are shared. Anything that changes the build belongs in `build.py` and, if it affects generated projects, in `template/`.
 - Re-run `scripts/setup.ps1` / `scripts/setup.sh` after changing toolchain requirements; both must stay idempotent and in sync.
 - Platform switches (`npx.cmd`, `claude.cmd`, `gradlew.bat`, `adb.exe`, `cmd /c npx` for MCP configs) hang off `os.name == "nt"` in the module that uses them; keep Linux working when touching them.
+
+## macOS specifics
+
+- `setup.sh` and `dev.sh` must work with the bundled Bash 3.2 (no `wait -n`).
+- Microsoft JDK tarballs on macOS use `jdk-17*/Contents/Home`; use the native arm64 or x64 archive. The SDK defaults to `~/Library/Android/sdk`.
+- Android native build tools need Rosetta 2 on Apple silicon; setup checks for it and prints the install command. No Homebrew or Android Studio dependency.
