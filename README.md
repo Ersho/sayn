@@ -12,12 +12,12 @@ laptop. Don't need a template? Just describe the app in a sentence.
 
 ---
 
-sayn costs nothing and has no accounts. It uses the coding agent you already have, Claude Code or
+sayn costs nothing and has no sayn account. iOS device installs additionally need an Apple account for signing. It uses the coding agent you already have, Claude Code or
 Codex CLI, billed to the Claude or ChatGPT plan you already pay for. sayn is the factory around it:
 
 - **Describe it.** One paragraph in a local dashboard. Codex CLI or Claude Code writes a real Expo /
-  React Native app, your laptop compiles a signed release APK, adb installs and launches it on the
-  phone on your desk. About 5 minutes.
+  React Native app, your laptop builds it, and sayn installs and launches it on the phone on your desk.
+  Android uses a signed release APK; iOS uses Xcode and Apple development signing.
 - **Or search the Play Store and make your own.** Browse the top charts or search any app, pick it,
   add your notes. The agent builds your version from the store listing, screenshots and reviews. Tick
   one box and [REA](https://github.com/morluto/rea) analyses the real APK into a feature spec
@@ -31,8 +31,8 @@ thing that leaves your laptop is the conversation your agent already has with it
 
 ## Quick start
 
-You need a Windows or Linux x64 machine, [Node 20+](https://nodejs.org), an Android phone with USB
-debugging on, and at least one coding agent signed in:
+You need a Mac (Apple silicon or Intel), Windows x64 or Linux x64 machine, [Node 22.13+, 24.3+, or 26+](https://nodejs.org),
+an Android phone with USB debugging on or an iPhone/iPad for macOS, and at least one coding agent signed in:
 
 ```bash
 npm i -g @openai/codex && codex login                      # Codex CLI (ChatGPT plan)
@@ -53,7 +53,7 @@ scripts\dev.ps1                                               # in a new termina
 
 Windows needs long paths enabled once; the script prints the exact admin command if they are not.
 
-**Linux**
+**macOS / Linux**
 
 ```bash
 git clone https://github.com/Ersho/sayn.git
@@ -62,12 +62,43 @@ bash scripts/setup.sh
 bash scripts/dev.sh
 ```
 
-If `adb devices` does not list your phone, install the udev rules (`android-sdk-platform-tools-common`
+On Apple silicon, install Rosetta 2 once for the Android native build tools:
+`softwareupdate --install-rosetta --agree-to-license`. Setup uses a native JDK 17 and defaults to
+`~/Library/Android/sdk` on macOS (`~/Android/Sdk` on Linux); set `ANDROID_HOME` before setup to use
+an existing SDK. Homebrew and Android Studio are not required.
+
+For Android, unlock the phone and accept its USB debugging prompt. macOS needs no USB driver. On Linux, if
+`adb devices` does not list your phone, install the udev rules (`android-sdk-platform-tools-common`
 on Debian/Ubuntu) and replug it.
 
-Then open <http://localhost:5173>, plug in the phone, accept the USB debugging prompt on it, and
-create your first app. The very first build downloads Gradle and compiles the native code (about
+Then open <http://localhost:5173> and create your first app. For iPhone/iPad, complete the setup below first.
+The very first Android build downloads Gradle and compiles the native code (about
 10 minutes); after that an app takes 5 to 7 minutes end to end, most of it in Gradle.
+
+## iPhone and iPad (macOS)
+
+The dashboard and coding agent run on your Mac, just like the Android workflow. iOS builds use
+local Xcode release builds and Apple development signing; no cloud build service is needed.
+
+1. Install full Xcode, launch it once to finish setup, and select it in Xcode → Settings → Locations → Command Line Tools.
+2. Install [CocoaPods](https://guides.cocoapods.org/using/getting-started) so `pod` is on your terminal's PATH.
+3. Add your Apple account in Xcode → Settings → Accounts. In sayn's Settings, save its ten-character Apple team ID (or set `VIBE_IOS_TEAM` before starting sayn).
+4. Connect and unlock your iPhone/iPad, trust the Mac, and enable Developer Mode in the device's Privacy & Security settings.
+5. In New app or Make my own version, choose **iPhone / iPad**, select the device, then generate and install the app.
+
+If iOS blocks the first launch, trust your developer profile in Settings → General → VPN & Device Management, then install again.
+
+A free Personal Team can sign local test installs, which expire after seven days and need rebuilding.
+Apple also limits free provisioning; see [Apple's account overview](https://developer.apple.com/help/account/basics/about-your-developer-account).
+For a Simulator build, start a Simulator in Xcode, choose **iOS Simulator**, and select it. It requires no signing team.
+Device and Simulator builds are different targets: install each on the matching device type.
+
+The current CLI can capture Android and Simulator screenshots. For a physical iPhone/iPad, use
+Xcode to capture its screen; successful installation does not depend on a screenshot. Native hardware
+features such as Bluetooth need testing on a real device. Browser previews remain available for compatible screens.
+
+Node is a prerequisite on every host. Setup installs the dashboard's local Vite dependency,
+including development dependencies even when `NODE_ENV=production`; a global Vite install is not needed.
 
 ## How it works
 
@@ -76,11 +107,11 @@ create your first app. The very first build downloads Gradle and compiles the na
                                               │
             1. copy template/ → ~/vibeapping/apps/<id>   (Expo SDK 58, expo-router, TypeScript)
             2. codex exec  |  claude -p      with the create / revise / fix prompt
-            3. tsc → expo prebuild → gradlew assembleRelease   (agent fixes build errors, up to 5 rounds)
-            4. adb install -r → launch → screenshot
+            3. tsc → expo prebuild → gradlew assembleRelease (Android) or pod install → xcodebuild (iOS)
+            4. adb (Android) or devicectl / simctl (iOS) → install → launch
 ```
 
-Builds are release builds signed with a keystore generated once on your machine, so apps stay
+Android release builds are signed with a keystore generated once on your machine, so apps stay
 installed, update in place and look like any other app. They all get the launcher label `my:<name>`,
 so typing `my:` in the phone's app search lists everything sayn made. Each app is a normal Expo
 project and a normal git repository: open it in any editor or keep iterating from the dashboard.
@@ -91,6 +122,7 @@ project and a normal git repository: open it in any editor or keep iterating fro
 |---|---|
 | Generated apps, keystore, config, caches | `~/vibeapping/` (`%USERPROFILE%\vibeapping` on Windows) |
 | Codex model | `VIBE_CODEX_MODEL` (default `gpt-5.6-sol`; the Codex config default is not available on ChatGPT plans) |
+| iOS signing team | Settings → iPhone and iPad signing, or `VIBE_IOS_TEAM` |
 | Claude model | `VIBE_CLAUDE_MODEL` (default: the CLI's own default) |
 | API keys for generated apps | Settings tab, stored in `~/vibeapping/keys.json`, passed to apps as `EXPO_PUBLIC_*` |
 

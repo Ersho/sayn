@@ -46,10 +46,13 @@ Ok 'LongPathsEnabled = 1'
 # ---- Node LTS -------------------------------------------------------------
 Step 'Node LTS'
 $node = Get-Command node -ErrorAction SilentlyContinue
-if (-not $node -or [int]((node -v) -replace '^v(\d+).*', '$1') -lt 20) {
+if ($node) { cmd /c ('node "{0}\check-node.mjs" 2>nul' -f $PSScriptRoot) }
+if (-not $node -or $LASTEXITCODE -ne 0) {
     Install-Winget 'OpenJS.NodeJS.LTS'
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
 }
+cmd /c ('node "{0}\check-node.mjs" 2>&1' -f $PSScriptRoot)
+if ($LASTEXITCODE -ne 0) { throw "Install a supported Node LTS release and re-run setup." }
 Ok "node $(node -v), npm $(npm -v)"
 
 # ---- JDK 17 (per-user zip install, no admin prompt) ------------------------
@@ -156,13 +159,13 @@ Ok "config.json + vibe.jks (alias $($config.alias))"
 Step 'npm dependencies'
 $repo = Split-Path $PSScriptRoot -Parent
 Push-Location (Join-Path $repo 'template')
-if (-not (Test-Path 'node_modules\expo')) { Write-Host '   npm ci in template (a few minutes)'; cmd /c 'npm ci --silent 2>&1' | Out-Null }
+if (-not (Test-Path 'node_modules\expo') -or -not (Test-Path 'node_modules\typescript\bin\tsc')) { Write-Host '   npm ci in template (a few minutes)'; cmd /c 'npm ci --include=dev --silent 2>&1' | Out-Null }
 Pop-Location
 Push-Location (Join-Path $repo 'dashboard')
-if (-not (Test-Path 'node_modulesite')) { cmd /c 'npm install --silent 2>&1' | Out-Null }
+if (-not (Test-Path 'node_modules\vite\bin\vite.js')) { cmd /c 'npm install --include=dev --silent 2>&1' | Out-Null }
 Pop-Location
 Push-Location (Join-Path $repo 'backend\playstore')
-if (-not (Test-Path 'node_modules\google-play-scraper')) { cmd /c 'npm install --silent 2>&1' | Out-Null }
+if (-not (Test-Path 'node_modules\google-play-scraper')) { cmd /c 'npm install --include=dev --silent 2>&1' | Out-Null }
 Pop-Location
 Ok 'template, dashboard, google-play-scraper installed'
 

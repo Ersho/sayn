@@ -2,9 +2,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 const API = "http://localhost:8000";
 
-type Device = { serial: string; model: string; name: string; state: string; first_seen: number; last_seen: number };
+type Platform = "android" | "ios";
+type BuildTarget = { platform: Platform; ios_target: "device" | "simulator"; ios_device: string };
+const ANDROID_TARGET: BuildTarget = { platform: "android", ios_target: "device", ios_device: "" };
+type Device = { platform: Platform; kind: "device" | "simulator"; serial: string; model: string; name: string; state: string; first_seen: number; last_seen: number };
 type App = {
-  id: string; name: string; request: string; agent?: string; model?: string; status: string; package: string;
+  id: string; name: string; request: string; platform: Platform; ios_target?: "device" | "simulator"; artifact: boolean; agent?: string; model?: string; status: string; package: string;
   installed_on: string[]; apk: boolean; apk_mb: number | null; error?: string; summary?: string;
   fix_rounds?: number; version: string; build: number; created: number; updated: number;
   history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
@@ -165,12 +168,13 @@ function Progress({ status, log, inspired }: { status: string; log: string[]; in
 }
 
 function DeployButton({ app, devices, onDone }: { app: App; devices: Device[]; onDone: () => void }) {
-  const online = devices.filter((d) => d.state === "device");
+  const online = devices.filter((d) => d.state === "device" && d.platform === app.platform
+    && (app.platform !== "ios" || d.kind === (app.ios_target || "device")));
   const [serial, setSerial] = useState("");
   const [busy, setBusy] = useState(false);
-  const chosen = serial || online[0]?.serial || "";
-  const disabled = !app.apk || online.length === 0 || busy;
-  const title = !app.apk ? "Not built yet" : online.length === 0 ? "Plug in a device to install" : "";
+  const chosen = online.some((d) => d.serial === serial) ? serial : online[0]?.serial || "";
+  const disabled = !app.artifact || BUSY.has(app.status) || online.length === 0 || busy;
+  const title = BUSY.has(app.status) ? "Still building" : !app.artifact ? "Not built yet" : online.length === 0 ? "Plug in a device to install" : "";
   const installed = app.installed_on.includes(chosen);
   return (
     <span className="deploy">
@@ -229,7 +233,7 @@ function AppCard({ app, tone, devices, reload, onRevise }: {
           <span className="app-icon">{app.name[0]?.toUpperCase()}</span>
           <div className="title">
             <h3>{app.name}</h3>
-            <div className="meta">v{app.version} · {busy ? "Working now" : `Updated ${ago(app.updated)}`}</div>
+            <div className="meta">{app.platform === "ios" ? "iOS" : "Android"}{app.platform === "ios" && app.ios_target === "simulator" ? " Simulator" : ""} · v{app.version} · {busy ? "Working now" : `Updated ${ago(app.updated)}`}</div>
           </div>
           <Badge status={app.status} />
         </div>
@@ -260,7 +264,7 @@ function AppCard({ app, tone, devices, reload, onRevise }: {
             {app.preview ? (
               <div className="try-frame"><iframe src={`${API}/apps/${app.id}/preview/`} title={`${app.name} preview`} /></div>
             ) : (
-              <button className="outline" disabled={making || !app.apk} onClick={async () => {
+              <button className="outline" disabled={making || !app.artifact} onClick={async () => {
                 setMaking(true);
                 try { await api(`/apps/${app.id}/preview`, { method: "POST" }); reload(); }
                 catch (e) { alert(String(e)); }
@@ -275,7 +279,7 @@ function AppCard({ app, tone, devices, reload, onRevise }: {
                 {app.reference_shots.map((n) => <img key={n} src={`${API}/apps/${app.id}/reference/${n}`} alt="" loading="lazy" />)}
               </div>
             ) : (
-              <p className="muted">No screenshot yet. Install the app on your device and one is taken automatically.</p>
+              <p className="muted">{app.platform === "ios" && app.ios_target !== "simulator" ? "For an iPhone or iPad screenshot, capture it in Xcode." : "No screenshot yet. Install the app on your device and one is taken automatically."}</p>
             )}
             {app.screenshot && app.reference_shots.length > 0 && <p className="muted small">First: your app on the device. The rest: the original app's Play Store screenshots.</p>}
             <p className="field-label">What it does</p>
@@ -337,6 +341,43 @@ function AgentPicker({ agent, setAgent }: { agent: keyof typeof AGENTS; setAgent
       </div>
     </>
   );
+}
+
+
+function TargetPicker({ target, setTarget, devices }: {
+  target: BuildTarget; setTarget: (target: BuildTarget) => void; devices: Device[];
+}) {
+  const [iosAvailable, setIosAvailable] = useState(false);
+  useEffect(() => { api<{ ios: { available: boolean } }>("/settings").then((s) => setIosAvailable(s.ios.available)).catch(() => {}); }, []);
+  const eligible = devices.filter((d) => d.platform === "ios" && d.kind === target.ios_target && d.state === "device");
+  return <>
+    <label className="field">Build for
+      <select aria-label="Build for" value={target.platform} onChange={(e) => setTarget({ ...target, platform: e.target.value as Platform, ios_target: "device", ios_device: "" })}>
+        <option value="android">Android</option>
+        <option value="ios" disabled={!iosAvailable}>iPhone / iPad{!iosAvailable ? " (requires macOS and Xcode)" : ""}</option>
+      </select>
+    </label>
+    {target.platform === "ios" && <>
+      <label className="field">Install on
+        <select aria-label="Install on" value={target.ios_target} onChange={(e) => setTarget({ ...target, ios_target: e.target.value as BuildTarget["ios_target"], ios_device: "" })}>
+          <option value="device">iPhone / iPad</option><option value="simulator">iOS Simulator</option>
+        </select>
+      </label>
+      {eligible.length > 0 && <label className="field">Device
+        <select aria-label="Device" value={target.ios_device || eligible[0].serial} onChange={(e) => setTarget({ ...target, ios_device: e.target.value })}>
+          {eligible.map((d) => <option key={d.serial} value={d.serial}>{d.name || d.model}</option>)}
+        </select>
+      </label>}
+      <p className="muted small">{target.ios_target === "device"
+        ? "Set your Apple signing team in Settings. Connect and unlock your iPhone, trust this Mac, and enable Developer Mode."
+        : "Start an iOS Simulator in Xcode before installing. Simulator builds do not need an Apple signing team."}</p>
+    </>}
+  </>;
+}
+
+function targetBody(target: BuildTarget, devices: Device[]): BuildTarget {
+  return { ...target, ios_device: target.ios_device || (target.platform === "ios"
+    ? devices.find((d) => d.platform === "ios" && d.kind === target.ios_target && d.state === "device")?.serial || "" : "") };
 }
 
 /* ---------- Play Store inspiration ---------- */
@@ -413,7 +454,7 @@ function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
   );
 }
 
-function InspireDialog({ app, onClose, onStarted }: { app: StoreApp; onClose: () => void; onStarted: (id: string) => void }) {
+function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; devices: Device[]; onClose: () => void; onStarted: (id: string) => void }) {
   const [details, setDetails] = useState<StoreDetails | null>(null);
   const [apkReady, setApkReady] = useState(false);
   const [more, setMore] = useState(false);
@@ -421,6 +462,7 @@ function InspireDialog({ app, onClose, onStarted }: { app: StoreApp; onClose: ()
   const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
   const [apk, setApk] = useState(false);
   const [reviews, setReviews] = useState(true);
+  const [target, setTarget] = useState<BuildTarget>(ANDROID_TARGET);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api<StoreDetails>(`/inspire/app/${app.appId}`).then(setDetails).catch(() => setDetails(null));
@@ -466,13 +508,14 @@ function InspireDialog({ app, onClose, onStarted }: { app: StoreApp; onClose: ()
               : "Not set up on this laptop yet. Run scripts\\setup.ps1 again to enable it."}</small>
           </span>
         </label>
+        <TargetPicker target={target} setTarget={setTarget} devices={devices} />
         <AgentPicker agent={agent} setAgent={setAgent} />
         <div className="row-end">
           <button className="outline" onClick={onClose}>Cancel</button>
           <button className="primary" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
-              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, inspiration: { app_id: app.appId, apk, reviews } }) });
+              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, ...targetBody(target, devices), inspiration: { app_id: app.appId, apk, reviews } }) });
               onStarted(r.id);
             } catch (e) { alert(String(e)); setBusy(false); }
           }}>{busy ? "Starting…" : "Build my version"} <Icon i={I.arrow} /></button>
@@ -511,7 +554,7 @@ function AppsPage({ apps, devices, reload, go, job, onRevise }: {
       {shown.length === 0 ? (
         <div className="empty-card">
           <h2>{apps.length === 0 ? "No apps yet." : "Nothing matches."}</h2>
-          <p className="sub">{apps.length === 0 ? "Describe an idea and your assistant turns it into an Android app." : "Try another search or filter."}</p>
+          <p className="sub">{apps.length === 0 ? "Describe an idea and your assistant turns it into a mobile app." : "Try another search or filter."}</p>
           {apps.length === 0 && <button className="primary big" onClick={() => go("new")}>Create your first app <Icon i={I.arrow} /></button>}
         </div>
       ) : (
@@ -524,7 +567,7 @@ function AppsPage({ apps, devices, reload, go, job, onRevise }: {
       {job && apps.find((a) => a.id === job && BUSY.has(a.status)) && (
         <p className="foot-note"><span className="dot" />An app is being built. <button className="link" onClick={() => go("new")}>Follow the progress</button></p>
       )}
-      <p className="foot-note"><Icon i={I.android} />Your apps have a life of their own. Once installed, they run without your laptop.</p>
+      <p className="foot-note"><Icon i={I.phone} />Your apps have a life of their own. Once installed, they run without your laptop.</p>
     </>
   );
 }
@@ -549,7 +592,7 @@ function DeviceName({ d }: { d: Device }) {
       onKeyDown={(e) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }} />;
   }
   return (
-    <b>{name || d.model || "Android device"}
+    <b>{name || d.model || "Mobile device"}
       <button className="ghost rename" title="Rename" onClick={() => { setText(name); setEditing(true); }}><Icon i={I.pencil} /></button>
     </b>
   );
@@ -567,7 +610,7 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
         <span className="phone-icon"><Icon i={I.phone} /></span>
         <div className="grow">
           <DeviceName d={d} />
-          <div className="meta">{label} · serial {d.serial}</div>
+          <div className="meta">{d.platform === "ios" ? "iOS" : "Android"} · {label} · serial {d.serial}</div>
           {d.state === "device" && (
             <div className="meta">{mine.length ? `Apps from here: ${mine.map((a) => a.name).join(", ")}` : "No sayn apps installed yet"}</div>
           )}
@@ -584,7 +627,7 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
         <div>
           <p className="eyebrow">The last step is the best one</p>
           <h1>Your apps. In your pocket.</h1>
-          <p className="sub">Connect an Android phone or tablet and take your creations with you.</p>
+          <p className="sub">Connect an Android device, iPhone, or iPad and take your creations with you.</p>
         </div>
       </header>
       <div className="two-col">
@@ -593,7 +636,7 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
             <div className="empty-phone">
               <div className="phone-art"><Icon i={I.phone} /><span className="plus-bubble"><Icon i={I.plus} /></span></div>
               <h2>A new home for your ideas.</h2>
-              <p className="sub">No devices connected yet. Plug in an Android phone or tablet to get started.</p>
+              <p className="sub">No devices connected yet. Plug in a phone or tablet to get started.</p>
               <p className="muted small">A USB cable is all you need to start.</p>
             </div>
           ) : (
@@ -613,8 +656,8 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
           <p className="eyebrow">Connect in a few minutes</p>
           <ol className="guide">
             <li><span className="num">1</span><div><b>Plug your phone or tablet into your laptop</b><p>Use a USB cable that supports data transfer.</p></div></li>
-            <li><span className="num">2</span><div><b>Enable USB debugging</b><p>Open Developer options on your device. <a href="https://developer.android.com/studio/debug/dev-options" target="_blank" rel="noreferrer">Show me how <Icon i={I.arrow} /></a></p></div></li>
-            <li><span className="num">3</span><div><b>Allow this computer</b><p>Accept the prompt on your device, then choose an app to install.</p></div></li>
+            <li><span className="num">2</span><div><b>Enable development access</b><p>Android: turn on USB debugging in Developer options. iPhone/iPad: enable Developer Mode in Privacy &amp; Security. <a href="https://developer.android.com/studio/debug/dev-options" target="_blank" rel="noreferrer">Android guide <Icon i={I.arrow} /></a></p></div></li>
+            <li><span className="num">3</span><div><b>Allow this computer</b><p>Accept Allow USB debugging on Android, or Trust This Computer on iPhone/iPad, then choose an app to install.</p></div></li>
           </ol>
         </aside>
       </div>
@@ -628,6 +671,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
 }) {
   const [name, setName] = useState("");
   const [request, setRequest] = useState("");
+  const [target, setTarget] = useState<BuildTarget>(ANDROID_TARGET);
   const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
   const [submitting, setSubmitting] = useState(false);
   const { log, status } = useJob(job, reload);
@@ -637,7 +681,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
   const submit = async () => {
     setSubmitting(true);
     try {
-      const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request, name, agent }) });
+      const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request, name, agent, ...targetBody(target, devices) }) });
       setJob(r.id);
       setName(""); setRequest("");
       reload();
@@ -663,6 +707,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
           {IDEAS.map((i) => <button key={i.label} className="chip" onClick={() => { setRequest(i.text); if (!name) setName(i.label); }}>{i.label}</button>)}
         </div>
         <hr />
+        <TargetPicker target={target} setTarget={setTarget} devices={devices} />
         <AgentPicker agent={agent} setAgent={setAgent} />
         <p className="muted small">Uses your local assistant and its usage allowance. Takes 5 to 10 minutes.</p>
         <button className="primary big wide" onClick={submit} disabled={!request.trim() || submitting || running}>
@@ -675,7 +720,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
           <section className="panel">
             <div className="title-row">
               <div className="title"><h2>{app?.name && app.name !== "New app" ? app.name : "Your new app"}</h2>
-                <div className="meta">{app?.agent === "claude" ? "Claude Code" : "Codex"}{app?.model ? ` (${app.model})` : ""} is on it</div></div>
+                <div className="meta">{app?.agent === "claude" ? "Claude Code" : "Codex"}{app?.model ? ` (${app.model})` : ""} is on it · {app?.platform === "ios" ? "iPhone / iPad" : "Android"}</div></div>
               <Badge status={status || app?.status || "created"} />
             </div>
             <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} />
@@ -691,8 +736,8 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
             <h2 className="pitch">You imagine it.<br />Your assistant builds it.</h2>
             <ol className="guide">
               <li><span className="num">1</span><div><b>Describe what you need</b><p>Tell us your idea in plain language. The more detail, the better.</p></div></li>
-              <li><span className="num">2</span><div><b>Make it feel like you</b><p>Your assistant turns your idea into a real Android app, tailored to your style and needs.</p></div></li>
-              <li><span className="num">3</span><div><b>Take it with you</b><p>Build, refine, and install it on your Android phone. Your ideas, right on your home screen.</p></div></li>
+              <li><span className="num">2</span><div><b>Make it feel like you</b><p>Your assistant turns your idea into a real mobile app, tailored to your style and needs.</p></div></li>
+              <li><span className="num">3</span><div><b>Take it with you</b><p>Build, refine, and install it on your phone. Your ideas, right on your home screen.</p></div></li>
             </ol>
             <div className="tip"><Icon i={I.sprout} /><div><b>Start small. Make it yours.</b><p>You don’t need to be a developer. Just bring an idea, and we’ll help you turn it into something real.</p></div></div>
           </>
@@ -707,13 +752,15 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
 
 /* ---------- shell ---------- */
 function SettingsPage() {
+  const [iosSettings, setIosSettings] = useState<{ available: boolean; team: string } | null>(null);
+  const [team, setTeam] = useState("");
   const [subs, setSubs] = useState<Subscription[] | null>(null);
   const [keys, setKeys] = useState<KeyInfo[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const checkSubs = () => { setSubs(null); api<Subscription[]>("/settings/subscriptions").then(setSubs).catch(() => setSubs([])); };
-  useEffect(() => { checkSubs(); api<{ keys: KeyInfo[] }>("/settings").then((r) => setKeys(r.keys)).catch((e) => setError(String(e))); }, []);
+  useEffect(() => { checkSubs(); api<{ keys: KeyInfo[]; ios: { available: boolean; team: string } }>("/settings").then((r) => { setKeys(r.keys); setIosSettings(r.ios); setTeam(r.ios.team); }).catch((e) => setError(String(e))); }, []);
   const call = async (id: string, path: string, init: RequestInit) => {
     setBusy(id); setError("");
     try { setKeys((await api<{ keys: KeyInfo[] }>(path, init)).keys); }
@@ -747,6 +794,19 @@ function SettingsPage() {
         </ul>
         <p className="muted small">Assistants use your ChatGPT or Claude subscription, so they never need an API key here.</p>
       </section>
+      {iosSettings?.available && <section className="panel" style={{ marginTop: 20 }}>
+        <h2 className="panel-title">iPhone and iPad signing</h2>
+        <p className="sub">Use the team from your Apple account in Xcode. A Personal Team works for local device testing; its installs expire and need rebuilding.</p>
+        <label className="field">Apple team ID
+          <input value={team} maxLength={10} onChange={(e) => setTeam(e.target.value.toUpperCase())} placeholder="Your 10-character team ID" />
+        </label>
+        <button className="outline" disabled={busy === "ios"} onClick={async () => {
+          setBusy("ios"); setError("");
+          try { const result = await api<{ team: string }>("/settings/ios", { method: "PUT", body: JSON.stringify({ team }) }); setTeam(result.team); }
+          catch (e) { setError(String(e)); }
+          setBusy("");
+        }}>Save signing team</button>
+      </section>}
       <section className="panel" style={{ marginTop: 20 }}>
         <h2 className="panel-title">API keys for your apps</h2>
         <ul className="phone-list">
@@ -826,7 +886,7 @@ export default function Root() {
           onStarted={(id) => { setRevising(null); setJob(id); setView("new"); reload(); }} />
       )}
       {inspiring && (
-        <InspireDialog app={inspiring} onClose={() => setInspiring(null)}
+        <InspireDialog app={inspiring} devices={devices} onClose={() => setInspiring(null)}
           onStarted={(id) => { setInspiring(null); setJob(id); setView("new"); reload(); }} />
       )}
     </div>

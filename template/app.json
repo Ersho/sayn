@@ -32,6 +32,10 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "ios": {
+      "bundleIdentifier": "com.vibeapping.__VIBE_ID__",
+      "supportsTablet": true
     }
   }
 }
