@@ -5,13 +5,16 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 [ -f "$HOME/vibeapping/env.sh" ] && source "$HOME/vibeapping/env.sh"
 [ -n "${ANDROID_HOME:-}" ] || { echo "ANDROID_HOME is not set. Run: bash scripts/setup.sh" >&2; exit 1; }
 
-if [ ! -d "$ROOT/dashboard/node_modules" ]; then
+node "$ROOT/scripts/check-node.mjs"
+
+if [ ! -f "$ROOT/dashboard/node_modules/vite/bin/vite.js" ]; then
     echo "Installing dashboard dependencies..."
-    (cd "$ROOT/dashboard" && npm install)
+    (cd "$ROOT/dashboard" && npm install --include=dev)
 fi
 
 (cd "$ROOT/backend" && exec uv run uvicorn vibe.api:app --port 8000) &
 BACKEND=$!
+# Keep Vite as the tracked child process so shutdown stops the server.
 (cd "$ROOT/dashboard" && exec node node_modules/vite/bin/vite.js) &
 DASHBOARD=$!
 stop() { kill "$BACKEND" "$DASHBOARD" 2>/dev/null || true; wait "$BACKEND" "$DASHBOARD" 2>/dev/null || true; }

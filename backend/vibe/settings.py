@@ -102,9 +102,9 @@ def subscriptions() -> list[dict]:
     except ValueError:
         info = {}
     detail = (info.get("email") or "Signed in") + (f" · {info['orgName']}" if info.get("orgName") else "")
-    claude = {"id": "claude", "label": "Claude Code", "ok": ok and bool(info.get("loggedIn")),
+    claude_info = {"id": "claude", "label": "Claude Code", "ok": ok and bool(info.get("loggedIn")),
               "detail": detail if info.get("loggedIn") else "Not signed in. Run `claude auth login` in a terminal."}
-    return [codex, claude]
+    return [codex, claude_info]
 
 
 def active_keys() -> dict[str, str]:

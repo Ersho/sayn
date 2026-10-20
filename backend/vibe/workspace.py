@@ -37,17 +37,19 @@ def app_dir(app_id: str) -> Path:
     return APPS / app_id
 
 
-def create_app(app_id: str, name: str, request: str, agent: str = "codex") -> Path:
+def create_app(app_id: str, name: str, request: str, agent: str = "codex", platform: str = "android",
+               ios_target: str = "device", ios_device: str = "") -> Path:
     """Copy the template, fill placeholders, git init + commit."""
     dst = app_dir(app_id)
-    shutil.copytree(TEMPLATE, dst, ignore=shutil.ignore_patterns("node_modules", ".expo", "android", ".git"))
+    shutil.copytree(TEMPLATE, dst, ignore=shutil.ignore_patterns("node_modules", ".expo", "android", "ios", ".git"))
 
     app_json = dst / "app.json"
     app_json.write_text(
         app_json.read_text("utf-8-sig").replace("__VIBE_ID__", app_id).replace("__VIBE_NAME__", name), "utf-8"
     )
     (dst / "vibe.json").write_text(
-        json.dumps({"id": app_id, "name": name, "request": request, "agent": agent}, indent=2) + "\n", "utf-8"
+        json.dumps({"id": app_id, "name": name, "request": request, "agent": agent, "platform": platform,
+                    "ios_target": ios_target, "ios_device": ios_device}, indent=2) + "\n", "utf-8"
     )
     write_status(app_id, "created")
     git(dst, "init", "-q")
@@ -103,7 +105,7 @@ def list_apps() -> list[dict]:
         return out
     for d in sorted(APPS.iterdir(), key=lambda p: p.stat().st_ctime, reverse=True):
         if (d / "vibe.json").exists():
-            out.append({**read_vibe(d.name), **read_status(d.name), "package": package_name(d.name), **details(d)})
+            out.append({**read_vibe(d.name), **read_status(d.name), "package": package_name(d.name), "platform": read_vibe(d.name).get("platform", "android"), **details(d)})
     return out
 
 

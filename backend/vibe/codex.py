@@ -21,7 +21,7 @@ def command(app: Path, mcp: bool = False) -> list[str]:
     add_dirs = []
     for d in EXTRA_WRITABLE:
         d.mkdir(parents=True, exist_ok=True)
-        add_dirs += ["--add-dir", str(d)]
+        add_dirs += ["--add-dir", str(d.resolve())]
     rea = []
     if mcp:  # REA's MCP server, so the agent can study inspiration/app.apk (values are TOML)
         jar = playstore.JADX_JAR.as_posix()

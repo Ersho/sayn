@@ -2,6 +2,8 @@
 import asyncio
 import json
 import re
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -12,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from . import build, devices, playstore, settings, workspace
+from . import build, devices, ios, playstore, settings, workspace
 
 app = FastAPI(title="vibeApping")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
@@ -43,6 +45,9 @@ class NewApp(BaseModel):
     request: str = ""  # may be empty when inspiration is given: then it holds the user's notes
     name: str = ""
     agent: str = "codex"  # "codex" or "claude"
+    platform: str = "android"
+    ios_target: str = "device"  # "device" or "simulator"
+    ios_device: str = ""
     inspiration: Inspiration | None = None
 
 
@@ -68,7 +73,22 @@ class KeyToggle(BaseModel):
 
 @app.get("/settings")
 def get_settings():
-    return {"keys": settings.list_keys()}
+    return {"keys": settings.list_keys(), "ios": {"available": ios.available(), "team": ios.team()}}
+
+
+class IosTeam(BaseModel):
+    team: str = ""
+
+
+@app.put("/settings/ios")
+def set_ios_team(body: IosTeam):
+    team = body.team.strip().upper()
+    if team and not re.fullmatch(r"[A-Z0-9]{10}", team):
+        raise HTTPException(400, "An Apple team ID has 10 letters or digits.")
+    cfg = workspace.config()
+    cfg["ios_team"] = team
+    workspace.CONFIG.write_text(json.dumps(cfg, indent=2) + "\n", "utf-8")
+    return {"team": ios.team()}
 
 
 @app.get("/settings/subscriptions")
@@ -132,7 +152,7 @@ def put_device_name(serial: str, body: DeviceName):
 
 @app.get("/apps")
 def get_apps():
-    installed = {d["serial"]: devices.installed_packages(d["serial"])
+    installed = {d["serial"]: devices.installed_packages(d["serial"], d["platform"], d["kind"])
                  for d in devices.list_devices() if d["state"] == "device"}
     apps = workspace.list_apps()
     for a in apps:
@@ -140,6 +160,7 @@ def get_apps():
         apk = build.apk_path(workspace.app_dir(a["id"]))
         a["apk"] = apk.exists()
         a["apk_mb"] = round(apk.stat().st_size / 1e6, 1) if apk.exists() else None
+        a["artifact"] = build.artifact_path(workspace.app_dir(a["id"])).exists()
     return apps
 
 
@@ -153,9 +174,24 @@ def post_app(body: NewApp):
         raise HTTPException(400, "empty request")
     if body.agent not in ("codex", "claude"):
         raise HTTPException(400, "unknown agent")
+    if body.platform not in {"android", "ios"}:
+        raise HTTPException(400, "Choose Android or iOS.")
+    if body.ios_target not in {"device", "simulator"}:
+        raise HTTPException(400, "Choose an iOS device or Simulator.")
+    if body.platform == "ios":
+        if not ios.available() or not shutil.which("pod"):
+            raise HTTPException(400, "iOS builds require macOS, full Xcode, and CocoaPods. See the iOS setup guide.")
+        if body.ios_target == "device" and not ios.team():
+            raise HTTPException(400, "Set your Apple signing team in Settings first.")
+        if body.ios_device and not any(d["serial"] == body.ios_device and d["platform"] == "ios"
+                                       and d["kind"] == body.ios_target and d["state"] == "device"
+                                       for d in devices.list_devices()):
+            raise HTTPException(400, "Connect the selected iPhone/iPad or start the selected Simulator first.")
     name = body.name.strip()[:40]
     app_id = workspace.new_id(name)
-    workspace.create_app(app_id, name or "New app", request, body.agent)
+    workspace.create_app(app_id, name or "New app", request, body.agent, body.platform,
+                         body.ios_target if body.platform == "ios" else "device",
+                         body.ios_device if body.platform == "ios" else "")
     emit(app_id, "status", "created")
     threading.Thread(target=build.pipeline,
                      args=(app_id, request, lambda k, t: emit(app_id, k, t), body.agent, name, inspiration),
@@ -245,20 +281,42 @@ async def events(app_id: str):
 @app.post("/apps/{app_id}/deploy")
 def deploy(app_id: str, body: Deploy):
     app_dir = _exists(app_id)
-    apk = build.apk_path(app_dir)
-    if not apk.exists():
-        raise HTTPException(409, "no APK yet")
+    vibe = workspace.read_vibe(app_id)
+    if workspace.read_status(app_id).get("status") in BUSY:
+        raise HTTPException(409, "The app is still building.")
+    artifact = build.artifact_path(app_dir)
+    if not artifact.exists():
+        raise HTTPException(409, "Build the app before installing it.")
+    device = next((d for d in devices.list_devices() if d["serial"] == body.serial and d["state"] == "device"), None)
+    if device is None:
+        raise HTTPException(400, "Connect and unlock the selected device first.")
+    platform = vibe.get("platform", "android")
+    if device["platform"] != platform or (platform == "ios" and device["kind"] != vibe.get("ios_target", "device")):
+        raise HTTPException(400, "This build is for a different platform or device type.")
     package = workspace.package_name(app_id)
     emit(app_id, "deploy", f"installing on {body.serial}")
     try:
-        devices.install(body.serial, apk)
-    except RuntimeError as e:
+        if platform == "ios":
+            ios.install(device, artifact)
+            ios.launch(device, package)
+            time.sleep(3)
+            captured = ios.screenshot(device, app_dir / "screenshot.png")
+            emit(app_id, "deploy", "installed and launched" + (", screenshot taken" if captured else "; device screenshots are available in Xcode"))
+        else:
+            devices.install(body.serial, artifact)
+            devices.launch(body.serial, package)
+            time.sleep(3)
+            devices.screenshot(body.serial, app_dir / "screenshot.png")
+            emit(app_id, "deploy", "installed, launched, screenshot taken")
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         emit(app_id, "deploy", f"install failed: {e}")
-        raise HTTPException(502, str(e))
-    devices.launch(body.serial, package)
-    time.sleep(3)
-    devices.screenshot(body.serial, app_dir / "screenshot.png")
-    emit(app_id, "deploy", "installed, launched, screenshot taken")
+        detail = str(e)
+        if platform == "ios" and "explicitly trusted" in detail:
+            detail = "iOS blocked launch. Trust your developer profile in Settings → General → VPN & Device Management, then try again."
+        elif platform == "ios" and "locked" in detail.lower():
+            detail = "Unlock your iPhone or iPad and try installing again."
+        raise HTTPException(502, detail)
+
     return {"ok": True, "package": package}
 
 

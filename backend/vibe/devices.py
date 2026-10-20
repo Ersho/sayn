@@ -8,7 +8,7 @@ from pathlib import Path
 
 import adbutils
 
-from . import workspace
+from . import ios, workspace
 
 ADB = str(Path(os.environ["ANDROID_HOME"]) / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb"))
 KNOWN = workspace.ROOT / "phones.json"  # {serial: {model, first_seen, last_seen}}: every device ever plugged in; optional "name" is the user's label
@@ -18,15 +18,23 @@ lock = threading.Lock()  # /devices and /apps poll concurrently; unsynced read-m
 
 def list_devices() -> list[dict]:
     out = []
-    for info in client.list():
+    try:
+        infos = client.list()
+    except adbutils.AdbError:
+        try:
+            subprocess.run([ADB, "start-server"], check=True, capture_output=True, timeout=10)
+            infos = client.list()
+        except (adbutils.AdbError, OSError, subprocess.SubprocessError):
+            infos = []
+    for info in infos:
         model = ""
         if info.state == "device":
             try:
                 model = client.device(info.serial).prop.model
             except Exception:
                 pass
-        out.append({"serial": info.serial, "state": info.state, "model": model})
-    return _remember(out)
+        out.append({"serial": info.serial, "state": info.state, "model": model, "platform": "android", "kind": "device"})
+    return _remember(out + ios.list_devices())
 
 
 def _remember(online: list[dict]) -> list[dict]:
@@ -39,8 +47,11 @@ def _merge(online: list[dict]) -> list[dict]:
     known = json.loads(KNOWN.read_text("utf-8-sig")) if KNOWN.exists() else {}
     now = time.time()
     for d in online:
-        k = known.setdefault(d["serial"], {"model": d["model"], "first_seen": now})
-        k["last_seen"] = now
+        k = known.setdefault(d["serial"], {"model": d["model"], "first_seen": now, "last_seen": now})
+        k["platform"] = d.get("platform", "android")
+        k["kind"] = d.get("kind", "device")
+        if d["state"] != "offline":
+            k["last_seen"] = now
         if d["model"]:
             k["model"] = d["model"]
     KNOWN.parent.mkdir(parents=True, exist_ok=True)
@@ -49,7 +60,7 @@ def _merge(online: list[dict]) -> list[dict]:
     out = []
     for serial, k in sorted(known.items(), key=lambda kv: -kv[1]["last_seen"]):
         d = live.get(serial, {"serial": serial, "state": "offline", "model": ""})
-        out.append({**d, "model": d["model"] or k["model"], "name": k.get("name", ""), "first_seen": k["first_seen"], "last_seen": k["last_seen"]})
+        out.append({**d, "platform": k.get("platform", "android"), "kind": k.get("kind", "device"), "model": d["model"] or k["model"], "name": k.get("name", ""), "first_seen": k["first_seen"], "last_seen": k["last_seen"]})
     return out
 
 
@@ -60,7 +71,9 @@ def rename(serial: str, name: str) -> None:
         KNOWN.write_text(json.dumps(known, indent=2), "utf-8")
 
 
-def installed_packages(serial: str) -> set[str]:
+def installed_packages(serial: str, platform: str = "android", kind: str = "device") -> set[str]:
+    if platform == "ios":
+        return ios.installed_packages({"serial": serial, "kind": kind})
     try:
         return set(client.device(serial).list_packages())
     except Exception:

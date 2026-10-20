@@ -39,7 +39,7 @@ step 'Basics'
 for t in curl unzip tar git; do need "$t"; done
 need node
 need npm
-[ "$(node -v | sed 's/^v\([0-9]*\).*/\1/')" -ge 20 ] || die "Node 20+ is required (found $(node -v)). https://nodejs.org or your package manager."
+node "$REPO/scripts/check-node.mjs"
 ok "node $(node -v), npm $(npm -v)"
 if [ "$OS/$ARCH" = Darwin/arm64 ] && ! /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
     die 'Android native build tools need Rosetta 2. Install it with: softwareupdate --install-rosetta --agree-to-license, then re-run.'
@@ -100,9 +100,9 @@ uv python install 3.12 >/dev/null
 ok "$(uv python find 3.12)"
 
 step 'npm dependencies (template, dashboard, Play Store scraper)'
-(cd "$REPO/template"  && { [ -d node_modules/expo ] || npm ci --silent; })
-(cd "$REPO/dashboard" && { [ -d node_modules/vite ] || npm install --silent; })
-(cd "$REPO/backend/playstore" && { [ -d node_modules/google-play-scraper ] || npm install --silent; })
+(cd "$REPO/template"  && { { [ -d node_modules/expo ] && [ -f node_modules/typescript/bin/tsc ]; } || npm ci --include=dev --silent; })
+(cd "$REPO/dashboard" && { [ -f node_modules/vite/bin/vite.js ] || npm install --include=dev --silent; })
+(cd "$REPO/backend/playstore" && { [ -d node_modules/google-play-scraper ] || npm install --include=dev --silent; })
 ok 'installed'
 
 step 'Coding agents'
@@ -164,4 +164,8 @@ if [ "$OS" = Linux ]; then
     echo "then log out and in, replug the phone and accept the USB debugging prompt on it."
 else
     echo "Unlock your phone and accept the USB debugging prompt. macOS needs no USB driver."
+fi
+
+if [ "$OS" = Darwin ]; then
+    echo "iOS builds also need Xcode and CocoaPods (pod). See the iOS setup section in README.md."
 fi

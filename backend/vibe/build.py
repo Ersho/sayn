@@ -1,13 +1,14 @@
-"""tsc → expo prebuild → gradlew assembleRelease, with a Codex fix loop."""
+"""Typecheck, prebuild and compile with Gradle or Xcode, with an agent fix loop."""
 import json
 import os
+import plistlib
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
 
-from . import claude, codex, playstore, settings, workspace
+from . import claude, codex, ios, playstore, settings, workspace
 
 MAX_FIX_ROUNDS = 5
 ERROR_TAIL = 200
@@ -18,6 +19,15 @@ Emit = Callable[[str, str], None]
 
 def apk_path(app: Path) -> Path:
     return app / "android" / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
+
+
+def artifact_path(app: Path) -> Path:
+    vibe = workspace.read_vibe(app.name)
+    if vibe.get("platform", "android") == "android":
+        return apk_path(app)
+    sdk = "iphonesimulator" if vibe.get("ios_target") == "simulator" else "iphoneos"
+    products = app / "ios" / "build" / "Build" / "Products" / f"Release-{sdk}"
+    return next(products.glob("*.app"), products / "app.app")
 
 
 def _run(app: Path, args: list[str], emit: Emit, cwd: Path | None = None) -> tuple[int, list[str]]:
@@ -40,6 +50,9 @@ def build(app: Path, emit: Emit) -> str | None:
     code, out = _run(app, [NPX, "tsc", "--noEmit"], emit)
     if code != 0:
         return "tsc --noEmit failed:\n" + "\n".join(out[-ERROR_TAIL:])
+
+    if workspace.read_vibe(app.name).get("platform", "android") == "ios":
+        return _build_ios(app, emit)
 
     code, out = _run(app, [NPX, "expo", "prebuild", "--platform", "android", "--no-install"], emit)
     if code != 0:
@@ -68,6 +81,47 @@ def build(app: Path, emit: Emit) -> str | None:
     return None
 
 
+def _build_ios(app: Path, emit: Emit) -> str | None:
+    if not ios.available():
+        return "iOS builds require macOS with full Xcode selected (xcode-select)."
+    if not shutil.which("pod"):
+        return "CocoaPods is required for iOS builds. Install it, then restart sayn."
+    vibe = workspace.read_vibe(app.name)
+    simulator = vibe.get("ios_target") == "simulator"
+    team = ios.team()
+    if not simulator and not team:
+        return "Choose your Apple signing team in Settings before building for an iPhone or iPad."
+    code, out = _run(app, [NPX, "expo", "prebuild", "--platform", "ios", "--no-install"], emit)
+    if code:
+        return "expo prebuild failed:\n" + "\n".join(out[-ERROR_TAIL:])
+    native = app / "ios"
+    # Generated native files can be recreated on the next prebuild.
+    for info in native.glob("*/Info.plist"):
+        data = plistlib.loads(info.read_bytes())
+        data["CFBundleDisplayName"] = "my:" + vibe["name"].removeprefix("my:")
+        info.write_bytes(plistlib.dumps(data))
+    code, out = _run(app, ["pod", "install"], emit, cwd=native)
+    if code:
+        return "pod install failed:\n" + "\n".join(out[-ERROR_TAIL:])
+    project = next(native.glob("*.xcworkspace"), None)
+    if project is None:
+        return "CocoaPods did not create an Xcode workspace."
+    device = vibe.get("ios_device", "")
+    destination = f"id={device}" if device else ("generic/platform=iOS Simulator" if simulator else "generic/platform=iOS")
+    args = ["xcodebuild", "-quiet", "-workspace", str(project), "-scheme", project.stem,
+            "-configuration", "Release", "-sdk", "iphonesimulator" if simulator else "iphoneos",
+            "-destination", destination, "-derivedDataPath", str(native / "build")]
+    if simulator:
+        args += ["CODE_SIGNING_ALLOWED=NO"]
+    else:
+        args += [f"DEVELOPMENT_TEAM={team}", "CODE_SIGN_STYLE=Automatic",
+                 "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration"]
+    code, out = _run(app, [*args, "build"], emit, cwd=native)
+    if code or not artifact_path(app).exists():
+        return "xcodebuild failed:\n" + "\n".join(out[-ERROR_TAIL:])
+    return None
+
+
 def export_preview(app: Path, emit: Emit) -> None:
     """Best-effort browser preview: `expo export --platform web` into dist/, served by the API at /apps/<id>/preview/."""
     app_json = app / "app.json"
@@ -90,7 +144,7 @@ def runner(agent: str):
 
 def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: str = "",
              inspiration: dict | None = None) -> None:
-    """Create with the chosen agent, then build/fix until the APK exists. Writes status.json as it goes.
+    """Create with the chosen agent, then build/fix until the artifact exists. Writes status.json as it goes.
 
     inspiration = {"app_id": <Play Store package>, "apk": bool, "reviews": bool}: the listing (and APK) is saved to
     inspiration/ first and the create prompt tells the agent to build its own version of that app."""
@@ -122,6 +176,9 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], st
                 emit("codex", f"model: {text}")
             else:
                 emit(kind, text)
+        vibe = workspace.read_vibe(app_id)
+        target = vibe.get("platform", "android")
+        prompt += f"\nTarget platform: {target}. Keep native APIs and permission declarations correct for this platform."
         return agent_run(app, prompt, on_event, mcp=mcp)
 
     def status(s: str, **extra):
@@ -139,6 +196,11 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], st
             workspace.update_vibe(app_id, inspiration=info)
         status("coding")
         message = run(app, prompt(info) + settings.keys_block(key_names), emit, mcp=bool(info and info["apk"]))
+        if commit == "create":
+            changes = subprocess.run(["git", "status", "--porcelain", "--", "app", "src", "modules"],
+                                     cwd=app, capture_output=True, text=True, check=True)
+            if not changes.stdout.strip():
+                raise RuntimeError("The assistant made no app changes. Check the technical log and try again.")
         after(message)
         workspace.commit(app, f"{agent}: {commit}")
 
@@ -191,6 +253,12 @@ def _apply_name(app_id: str, message: str) -> None:
 
 
 def permissions(app_id: str) -> list[str]:
+    if workspace.read_vibe(app_id).get("platform", "android") == "ios":
+        app_json = json.loads((workspace.app_dir(app_id) / "app.json").read_text("utf-8-sig"))
+        info = app_json["expo"].get("ios", {}).get("infoPlist", {})
+        for native_info in (workspace.app_dir(app_id) / "ios").glob("*/Info.plist"):
+            info.update(plistlib.loads(native_info.read_bytes()))
+        return sorted(k for k in info if k.endswith("UsageDescription"))
     manifest = workspace.app_dir(app_id) / "android" / "app" / "src" / "main" / "AndroidManifest.xml"
     if not manifest.exists():
         return []

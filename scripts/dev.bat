@@ -2,11 +2,13 @@
 rem Starts the backend (http://localhost:8000) and the dashboard (http://localhost:5173),
 rem each in its own window. Close a window (or press Ctrl+C in it) to stop that server.
 set ROOT=%~dp0..
+node "%ROOT%\scripts\check-node.mjs"
+if errorlevel 1 exit /b 1
 
-if not exist "%ROOT%\dashboard\node_modules" (
+if not exist "%ROOT%\dashboard\node_modules\vite\bin\vite.js" (
     echo Installing dashboard dependencies...
     pushd "%ROOT%\dashboard"
-    call npm install
+    call npm install --include=dev
     popd
 )
 
