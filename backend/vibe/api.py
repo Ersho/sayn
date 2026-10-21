@@ -306,8 +306,8 @@ def deploy(app_id: str, body: Deploy):
             devices.install(body.serial, artifact)
             devices.launch(body.serial, package)
             time.sleep(3)
-            devices.screenshot(body.serial, app_dir / "screenshot.png")
-            emit(app_id, "deploy", "installed, launched, screenshot taken")
+            captured = devices.screenshot(body.serial, app_dir / "screenshot.png", package)
+            emit(app_id, "deploy", "installed and launched" + (", screenshot taken" if captured else "; no screenshot (the app was not in front, e.g. phone locked or notifications open)"))
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         emit(app_id, "deploy", f"install failed: {e}")
         detail = str(e)

@@ -94,10 +94,23 @@ def install(serial: str, apk: Path) -> None:
 def launch(serial: str, package: str) -> None:
     d = client.device(serial)
     d.keyevent("KEYCODE_WAKEUP")
-    d.shell("wm dismiss-keyguard")  # only works without a PIN; otherwise the screenshot shows the lock screen
+    d.shell("wm dismiss-keyguard")  # only works without a PIN; screenshot() then refuses the lock screen
+    d.shell("cmd statusbar collapse")
     d.app_start(package)
 
 
-def screenshot(serial: str, dest: Path) -> Path:
-    client.device(serial).screenshot().save(dest)
-    return dest
+def screenshot(serial: str, dest: Path, package: str, wait: float = 6) -> bool:
+    """Save a screenshot only while the app's own window has focus.
+
+    Otherwise the picture would show the notification shade, lock screen or another app (private content).
+    """
+    d = client.device(serial)
+    deadline = time.time() + wait
+    while True:
+        focus = d.shell("dumpsys window | grep mCurrentFocus")
+        if f" {package}/" in focus:
+            d.screenshot().save(dest)
+            return True
+        if time.time() > deadline:
+            return False
+        time.sleep(0.5)
