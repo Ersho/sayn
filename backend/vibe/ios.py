@@ -10,8 +10,6 @@ from pathlib import Path
 
 from . import workspace
 
-XCODE_PREFS = Path.home() / 'Library/Preferences/com.apple.dt.Xcode.plist'
-
 
 def available() -> bool:
     if sys.platform != 'darwin' or not shutil.which('xcodebuild'):
@@ -73,12 +71,22 @@ def list_devices() -> list[dict]:
     return out
 
 
-def teams() -> list[dict]:
-    """Signing teams of the Apple accounts added in Xcode → Settings → Accounts."""
+def _preferences() -> dict:
+    if sys.platform != 'darwin':
+        return {}
     try:
-        prefs = plistlib.loads(XCODE_PREFS.read_bytes())
-    except (OSError, ValueError):
-        return []
+        # Let macOS locate this user's preferences, even when the launcher overrides HOME.
+        result = subprocess.run(['defaults', 'export', 'com.apple.dt.Xcode', '-'],
+                                capture_output=True, check=True, timeout=5)
+        return plistlib.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {}
+
+
+def teams(prefs: dict | None = None) -> list[dict]:
+    """Signing teams of the Apple accounts added in Xcode → Settings → Accounts."""
+    if prefs is None:
+        prefs = _preferences()
     found = {}
     # Xcode versions differ in the key; both hold {account: [team, ...]}.
     for key in ('IDEProvisioningTeamByIdentifier', 'IDEProvisioningTeams'):
@@ -105,7 +113,13 @@ def checks() -> list[dict]:
     """The iPhone/iPad setup checkpoints in the order a user completes them; `hint` is the next step."""
     xcode = available() and subprocess.run(['xcodebuild', '-checkFirstLaunchStatus'],
                                            capture_output=True, timeout=10).returncode == 0
-    found = teams()
+    prefs = _preferences()
+    found = teams(prefs)
+    accounts = prefs.get('DVTDeveloperAccountManagerAppleIDLists', {})
+    has_account = bool(found) or any(
+        isinstance(account, dict) and bool(account.get('identifier'))
+        for entries in accounts.values() if isinstance(entries, list)
+        for account in entries)
     phones = _phones() if xcode else []
     paired = [d for d in phones if d.get('connectionProperties', {}).get('pairingState') == 'paired']
     names = ', '.join(f"{t['name']} ({t['id']})" for t in found)
@@ -116,7 +130,7 @@ def checks() -> list[dict]:
         {'id': 'pods', 'label': 'CocoaPods installed', 'ok': shutil.which('pod') is not None,
          'hint': 'In Terminal run: brew install cocoapods (without Homebrew: sudo gem install cocoapods). '
                  'Then restart sayn.'},
-        {'id': 'account', 'label': 'Apple account added to Xcode', 'ok': bool(found or team()),
+        {'id': 'account', 'label': 'Apple account added to Xcode', 'ok': has_account,
          'hint': 'In Xcode → Settings → Accounts, click + and sign in with your Apple ID. A free account works.'},
         {'id': 'team', 'label': 'Signing team chosen in sayn', 'ok': bool(team()),
          'hint': (f'Found in Xcode: {names}. ' if names else '')
