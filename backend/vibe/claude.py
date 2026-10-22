@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Iterator
 
-from . import playstore
+from . import playstore, workspace
 
 MODEL = os.environ.get("VIBE_CLAUDE_MODEL", "")  # empty: the CLI's own default
 LAST_MESSAGE = "claude-last.md"
@@ -33,8 +33,8 @@ def command(app: Path, mcp: bool = False) -> list[str]:
 def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False) -> str:
     """Run Claude Code; emit('codex', line) per event, emit('model', name) once; return the final message. Raise on failure.
     mcp=True adds REA's MCP server (APK analysis)."""
-    proc = subprocess.Popen(
-        command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    proc = workspace.popen(
+        app, command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, env=playstore.agent_env() if mcp else None,
     )
     proc.stdin.write(prompt)

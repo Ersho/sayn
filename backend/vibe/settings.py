@@ -1,8 +1,9 @@
 """Settings: agent subscription checks and API keys that generated apps may use.
 
-Keys live in ~/vibeapping/keys.json. They never leave the backend except as a masked hint; enabled,
-verified keys are written to each app's .env as EXPO_PUBLIC_* variables (Expo inlines them into the APK)."""
+Keys live in ~/vibeapping/keys.json. They never leave the backend except as a masked hint. Only an app the user
+agreed to give AI gets one, written to its .env as an EXPO_PUBLIC_* variable (Expo inlines it into the APK)."""
 import json
+import os
 import re
 import subprocess
 import urllib.request
@@ -51,14 +52,14 @@ def list_keys() -> list[dict]:
     data = _load()
     return [{"id": p, "label": v["label"], "saved": p in data,
              "hint": _mask(data[p]["value"]) if p in data else None,
-             "valid": data.get(p, {}).get("valid"), "message": data.get(p, {}).get("message"),
-             "enabled": data.get(p, {}).get("enabled", False)} for p, v in PROVIDERS.items()]
+             "valid": data.get(p, {}).get("valid"), "message": data.get(p, {}).get("message")}
+            for p, v in PROVIDERS.items()]
 
 
 def set_key(provider: str, value: str) -> None:
     ok, message = verify(provider, value)
     data = _load()
-    data[provider] = {"value": value, "valid": ok, "message": message, "enabled": ok}  # a working key is used right away
+    data[provider] = {"value": value, "valid": ok, "message": message}
     _save(data)
 
 
@@ -66,14 +67,6 @@ def recheck(provider: str) -> None:
     data = _load()
     ok, message = verify(provider, data[provider]["value"])
     data[provider].update(valid=ok, message=message)
-    if not ok:
-        data[provider]["enabled"] = False
-    _save(data)
-
-
-def toggle(provider: str, enabled: bool) -> None:
-    data = _load()
-    data[provider]["enabled"] = enabled and bool(data[provider].get("valid"))
     _save(data)
 
 
@@ -107,15 +100,30 @@ def subscriptions() -> list[dict]:
     return [codex, claude_info]
 
 
-def active_keys() -> dict[str, str]:
-    """env var -> value for keys that are verified and switched on."""
-    return {PROVIDERS[p]["env"]: v["value"] for p, v in _load().items()
-            if p in PROVIDERS and v.get("enabled") and v.get("valid")}
+def pick(provider: str) -> str | None:
+    """The saved, working key for an app that wants this provider ("any": the first one that works)."""
+    working = [p for p, v in _load().items() if p in PROVIDERS and v.get("valid")]
+    if provider in working:
+        return provider
+    return working[0] if provider == "any" and working else None
 
 
-def write_env(app: Path) -> list[str]:
-    """Write the app's .env (git-excluded) and return the variable names it holds."""
-    keys = active_keys()
+SKIP_DIRS = {"node_modules", "android", "ios", "dist", ".expo", ".git", "inspiration"}
+
+
+def used_providers(app: Path) -> list[str]:
+    """Providers whose key the app's own code reads: what the dashboard's "Uses AI" label shows."""
+    code = ""
+    for root, dirs, files in os.walk(app):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        code += "".join(Path(root, f).read_text("utf-8", errors="replace") for f in files
+                        if f.endswith((".ts", ".tsx", ".js", ".jsx")))
+    return [p for p, v in PROVIDERS.items() if v["env"] in code]
+
+
+def write_env(app: Path, provider: str | None) -> list[str]:
+    """Write the app's .env (git-excluded) with the one key it may use, or remove it; return the variable names."""
+    keys = {PROVIDERS[provider]["env"]: _load()[provider]["value"]} if provider else {}
     env = app / ".env"
     if keys:
         env.write_text("".join(f"{k}={v}\n" for k, v in keys.items()), "utf-8")
@@ -130,8 +138,9 @@ def write_env(app: Path) -> list[str]:
 def keys_block(names: list[str]) -> str:
     """Prompt text telling the agent which keys exist (never their values)."""
     if not names:
-        return ""
-    return ("\nThe user has set up these API keys for the app; they are available as `process.env.<NAME>` "
+        return ("\nThis app has no AI API keys. Do not call any online AI service; if part of the request would need "
+                "AI, build the closest version that works without it.\n")
+    return ("\nThe user agreed that this app uses AI. These API keys are available as `process.env.<NAME>` "
             "(Expo inlines `EXPO_PUBLIC_*` variables at build time): " + ", ".join(names)
             + ". Use one only if the request really needs that provider, read it through process.env, and never "
             "write a key into source files.\n")

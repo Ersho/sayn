@@ -12,6 +12,7 @@ type App = {
   fix_rounds?: number; version: string; build: number; created: number; updated: number;
   history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
   inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean };
+  ai_used: string[]; question?: { why: string; provider: string; key: string | null };
 };
 type StoreApp = {
   appId: string; title: string; developer: string; icon: string; score: number | null; installs: string | null;
@@ -19,7 +20,7 @@ type StoreApp = {
 };
 type StoreDetails = StoreApp & { description: string; screenshots: string[]; url: string; reviews: { score: number; text: string }[] };
 type View = "apps" | "devices" | "inspire" | "new" | "settings";
-type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null; enabled: boolean };
+type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null };
 type Subscription = { id: string; label: string; ok: boolean; detail: string };
 type IosCheck = { id: string; label: string; ok: boolean; hint: string };
 type IosTeam = { id: string; name: string; personal: boolean };
@@ -48,10 +49,12 @@ function ago(t: number) {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", coding: "Writing code", building: "Building",
-  fixing: "Fixing build", ready: "Ready to install", failed: "Failed", unknown: "Imported",
+  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", checking: "Checking for AI",
+  waiting: "Needs your answer", coding: "Writing code", building: "Building",
+  fixing: "Fixing build", ready: "Ready to install", failed: "Failed", cancelled: "Cancelled", unknown: "Imported",
 };
-const BUSY = new Set(["created", "preparing", "inspiring", "coding", "building", "fixing"]);
+const BUSY = new Set(["created", "preparing", "inspiring", "checking", "waiting", "coding", "building", "fixing"]);
+const PROVIDER_LABEL: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic (Claude)", gemini: "Google Gemini" };
 const CATEGORY_LABEL: Record<string, string> = {
   PRODUCTIVITY: "Productivity", HEALTH_AND_FITNESS: "Health & fitness", LIFESTYLE: "Lifestyle", TOOLS: "Tools",
   EDUCATION: "Education", FINANCE: "Finance", FOOD_AND_DRINK: "Food & drink", TRAVEL_AND_LOCAL: "Travel",
@@ -133,7 +136,7 @@ function useJob(id: string, reload: () => void) {
 
 /* ---------- small pieces ---------- */
 function Badge({ status }: { status: string }) {
-  const busy = BUSY.has(status);
+  const busy = BUSY.has(status) && status !== "waiting";
   return (
     <span className={`badge badge-${busy ? "busy" : status}`}>
       {status === "ready" ? <Icon i={I.check} /> : busy ? <span className="dot" /> : null}
@@ -146,13 +149,14 @@ function Progress({ status, log, inspired }: { status: string; log: string[]; in
   const [showLog, setShowLog] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
   useEffect(() => { if (showLog) logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [log, showLog]);
-  const keys = ["preparing", ...(inspired ? ["inspiring"] : []), "coding", "building", "ready"];
+  const keys = ["preparing", ...(inspired ? ["inspiring"] : []), "checking", "coding", "building", "ready"];
   const label: Record<string, string> = {
-    preparing: "Preparing project", inspiring: "Studying the original app", coding: "Writing the code",
+    preparing: "Preparing project", inspiring: "Studying the original app",
+    checking: status === "waiting" ? "Waiting for your answer" : "Checking if it needs AI", coding: "Writing the code",
     building: status === "fixing" ? "Fixing the build" : "Building the app", ready: "Ready to install",
   };
   const steps = keys.map((k) => label[k]);
-  const idx = keys.indexOf(status === "fixing" ? "building" : status);
+  const idx = keys.indexOf(status === "fixing" ? "building" : status === "waiting" ? "checking" : status);
   return (
     <div className="progress">
       <ol className="steps">
@@ -163,9 +167,55 @@ function Progress({ status, log, inspired }: { status: string; log: string[]; in
         ))}
       </ol>
       {status === "failed" && <p className="error">The build failed after several fix attempts. Open the app card for details.</p>}
+      {status === "cancelled" && <p className="muted">You stopped this build.</p>}
       <button className="link" onClick={() => setShowLog((v) => !v)}>{showLog ? "Hide technical log" : "Show technical log"}</button>
       {showLog && <pre ref={logRef} className="log">{log.join("\n")}</pre>}
     </div>
+  );
+}
+
+/** Shown while a job waits in "waiting": the app needs AI, and the user decides whether it gets a key. */
+function AiQuestion({ app, reload, go }: { app: App; reload: () => void; go?: (v: View) => void }) {
+  const [sending, setSending] = useState(false);
+  const q = app.question;
+  if (app.status !== "waiting" || !q) return null;
+  const wanted = PROVIDER_LABEL[q.provider] ?? "AI";
+  const answer = async (use_ai: boolean) => {
+    setSending(true);
+    try { await api(`/apps/${app.id}/answer`, { method: "POST", body: JSON.stringify({ use_ai }) }); }
+    catch (e) { alert(String(e)); }
+    setSending(false);
+    reload();
+  };
+  return (
+    <div className="ai-ask">
+      <b><Icon i={I.bulb} />This app wants to use AI</b>
+      {q.why && <p>It would use AI {q.why.replace(/\.$/, "")}.</p>}
+      {q.key
+        ? <p className="muted small">It will use your {PROVIDER_LABEL[q.key]} key. Each use is billed to your account, and the key is stored inside the app on your phone.</p>
+        : <p className="muted small">You have no working {wanted} key yet. Add one in Settings and come back, or build the app without AI.</p>}
+      <div className="row-end">
+        <button className="outline" disabled={sending} onClick={() => answer(false)}>Build without AI</button>
+        {q.key
+          ? <button className="primary" disabled={sending} onClick={() => answer(true)}>Use AI</button>
+          : go && <button className="primary" onClick={() => go("settings")}>Add a key in Settings</button>}
+      </div>
+    </div>
+  );
+}
+
+function CancelButton({ app, reload }: { app: App; reload: () => void }) {
+  const [stopping, setStopping] = useState(false);
+  const revising = app.history.some((h) => /^(codex|claude): create$/.test(h.message));
+  return (
+    <button className="outline" disabled={stopping} onClick={async () => {
+      const what = revising ? "Your app goes back to how it was before this change." : "The unfinished app stays in My apps.";
+      if (!confirm(`Stop working on ${app.name}? ${what}`)) return;
+      setStopping(true);
+      try { await api(`/apps/${app.id}/cancel`, { method: "POST" }); }
+      catch (e) { alert(String(e)); setStopping(false); }
+      reload();
+    }}>{stopping ? "Stopping…" : "Cancel build"}</button>
   );
 }
 
@@ -211,8 +261,8 @@ function describeCommit(m: string) {
 }
 
 /* ---------- app card ---------- */
-function AppCard({ app, tone, devices, reload, onRevise }: {
-  app: App; tone: string; devices: Device[]; reload: () => void; onRevise: (app: App) => void;
+function AppCard({ app, tone, devices, reload, onRevise, go }: {
+  app: App; tone: string; devices: Device[]; reload: () => void; onRevise: (app: App) => void; go: (v: View) => void;
 }) {
   const [history, setHistory] = useState(false);
   const [shotKey, setShotKey] = useState(0);
@@ -244,7 +294,9 @@ function AppCard({ app, tone, devices, reload, onRevise }: {
         {app.inspiration && (
           <p className="inspired-by"><img src={storeImg(app.inspiration.icon, 64)} alt="" />Inspired by {app.inspiration.title}{app.inspiration.apk ? " (studied the original app)" : ""}</p>
         )}
+        {app.ai_used.length > 0 && <p className="uses-ai" title="Each use is billed to your API key"><Icon i={I.bulb} />Uses AI · {app.ai_used.join(", ")}</p>}
         {phones.length > 0 &&<p className="installed"><Icon i={I.check} />Installed on {phones.join(", ")}</p>}
+        <AiQuestion app={app} reload={reload} go={go} />
         {app.status === "failed" && <details className="fail"><summary>Build failed, show details</summary><pre>{app.error}</pre></details>}
         <button className="link" onClick={() => setHistory((v) => !v)}>Version history <Icon i={I.arrow} /></button>
         {history && (
@@ -253,7 +305,9 @@ function AppCard({ app, tone, devices, reload, onRevise }: {
           </ol>
         )}
         <div className="card-actions">
-          <button className="outline" disabled={busy} onClick={() => onRevise(app)}><Icon i={I.pencil} />Revise app</button>
+          {busy
+            ? <CancelButton app={app} reload={reload} />
+            : <button className="outline" onClick={() => onRevise(app)}><Icon i={I.pencil} />Revise app</button>}
           <DeployButton app={app} devices={devices} onDone={() => { setShotKey(Date.now()); reload(); }} />
         </div>
       </div>
@@ -568,7 +622,7 @@ function AppsPage({ apps, devices, reload, go, job, onRevise }: {
       ) : (
         <div className="cards">
           {shown.map((a) => (
-            <AppCard key={a.id} app={a} tone={TONES[apps.indexOf(a) % TONES.length]} devices={devices} reload={reload} onRevise={onRevise} />
+            <AppCard key={a.id} app={a} tone={TONES[apps.indexOf(a) % TONES.length]} devices={devices} reload={reload} onRevise={onRevise} go={go} />
           ))}
         </div>
       )}
@@ -732,6 +786,8 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
               <Badge status={status || app?.status || "created"} />
             </div>
             <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} />
+            {app && <AiQuestion app={app} reload={reload} go={go} />}
+            {app && running && <div className="row-end"><CancelButton app={app} reload={reload} /></div>}
             {app && !BUSY.has(app.status) && (
               <div className="row-end">
                 <button className="outline" onClick={() => setJob("")}>Start another</button>
@@ -751,7 +807,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
           </>
         )}
         {app && app.status === "ready" && (
-          <div className="cards one"><AppCard app={app} tone={TONES[apps.indexOf(app) % TONES.length]} devices={devices} reload={reload} onRevise={onRevise} /></div>
+          <div className="cards one"><AppCard app={app} tone={TONES[apps.indexOf(app) % TONES.length]} devices={devices} reload={reload} onRevise={onRevise} go={go} /></div>
         )}
       </aside>
     </div>
@@ -785,7 +841,7 @@ function SettingsPage() {
         <div>
           <p className="eyebrow">Settings</p>
           <h1>Accounts and keys</h1>
-          <p className="sub">Check who builds your apps, and give your apps the keys they need to use AI.</p>
+          <p className="sub">Check who builds your apps, and add the keys your apps can use for AI.</p>
         </div>
       </header>
       <section className="panel">
@@ -858,11 +914,6 @@ function SettingsPage() {
               {k.saved && (
                 <>
                   <span className={`badge badge-${k.valid ? "ready" : "failed"}`}>{k.valid ? <><Icon i={I.check} />Works</> : "Not working"}</span>
-                  <label className="use-toggle">
-                    <input type="checkbox" checked={k.enabled} disabled={!k.valid || busy === k.id}
-                      onChange={(e) => call(k.id, `/settings/keys/${k.id}/enabled`, post({ enabled: e.target.checked }))} />
-                    Use in apps
-                  </label>
                   <button className="ghost" disabled={busy === k.id} onClick={() => call(k.id, `/settings/keys/${k.id}/check`, post({}))}>Recheck</button>
                   <button className="ghost" disabled={busy === k.id} onClick={() => call(k.id, `/settings/keys/${k.id}`, { method: "DELETE" })}>Remove</button>
                 </>
@@ -871,7 +922,7 @@ function SettingsPage() {
           ))}
         </ul>
         {error && <p className="muted small">{error}</p>}
-        <p className="muted small">Keys are stored only on this laptop. Ticked keys are added to apps you create or change from now on, and end up inside the installed app. Use keys with a spending limit.</p>
+        <p className="muted small">Keys are stored only on this laptop. When an app needs AI, you are asked first; only an app you say yes to gets a key, and it ends up inside the installed app. Use keys with a spending limit.</p>
       </section>
     </>
   );

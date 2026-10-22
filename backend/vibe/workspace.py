@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -73,6 +74,68 @@ def git(cwd: Path, *args: str) -> None:
 def commit(cwd: Path, message: str) -> None:
     git(cwd, "add", "-A")
     subprocess.run(["git", "commit", "-q", "-m", message], cwd=cwd, capture_output=True)  # no-op if clean
+
+
+class Cancelled(Exception):
+    pass
+
+
+JOBS: set[str] = set()  # app ids with a create/revise job running in this backend process
+CANCELLED: set[str] = set()  # app ids whose job the user asked to stop
+ANSWERS: dict[str, bool] = {}  # app id -> the user's "use AI?" answer, for a job paused in "waiting"
+_PROCS: dict[str, subprocess.Popen] = {}  # app id -> the agent or build command running for it
+
+
+def popen(app: Path, args: list[str], **kw) -> subprocess.Popen:
+    """subprocess.Popen for a job step, registered so cancel() can stop it and everything it started."""
+    check_cancelled(app.name)
+    proc = subprocess.Popen(args, start_new_session=os.name != "nt", **kw)
+    _PROCS[app.name] = proc
+    if app.name in CANCELLED:  # cancel() ran while the process was starting
+        _kill(proc)
+    return proc
+
+
+def check_cancelled(app_id: str) -> None:
+    if app_id in CANCELLED:
+        raise Cancelled("Cancelled")
+
+
+def cancel(app_id: str) -> bool:
+    """Stop the app's running job. False when no job is running here (e.g. a status left by a backend restart)."""
+    if app_id not in JOBS:
+        return False
+    CANCELLED.add(app_id)
+    if app_id in _PROCS:
+        _kill(_PROCS[app_id])
+    return True
+
+
+def end_job(app_id: str) -> None:
+    JOBS.discard(app_id)
+    CANCELLED.discard(app_id)
+    ANSWERS.pop(app_id, None)
+    _PROCS.pop(app_id, None)
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        os.killpg(proc.pid, signal.SIGTERM)
+
+
+def head(cwd: Path) -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def rollback(cwd: Path, rev: str) -> None:
+    """Put the app's files back to commit rev; the event log and status stay as they are."""
+    git(cwd, "reset", "-q", rev)
+    git(cwd, "checkout", rev, "--", ".", ":(exclude)events.jsonl", ":(exclude)status.json")
+    git(cwd, "clean", "-fdq")
 
 
 def write_status(app_id: str, status: str, **extra) -> dict:
