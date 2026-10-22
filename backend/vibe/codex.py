@@ -1,11 +1,12 @@
 """Run `codex exec` unattended inside an app folder and stream its events."""
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Callable, Iterator
 
-from . import playstore
+from . import playstore, workspace
 
 MODEL = os.environ.get("VIBE_CODEX_MODEL", "gpt-5.6-sol")  # the config.toml default is not usable on ChatGPT plans
 LAST_MESSAGE = "codex-last.md"
@@ -82,6 +83,27 @@ REVISE = """Read AGENTS.md and vibe.json. This app already exists and works. The
 
 Implement it without breaking what is already there, run `npx tsc --noEmit` until it passes, then finish. Your final message must be one short paragraph describing what changed, written for a non-technical user. Do not mention TypeScript, code, builds or files."""
 
+AI_CHECK = """Do not change any files and do not run any commands; only answer. A user asked for {what}:
+
+{request}
+
+Decide whether the app needs an AI model from an online API (OpenAI, Anthropic Claude or Google Gemini) to do what the user asked, for example to chat, understand or write text, summarise, translate, or recognise what is in a photo. Ordinary app logic, storage, lists, timers, charts, reminders and phone features do not need AI. Answer with exactly these three lines and nothing else:
+AI: yes or no
+PROVIDER: openai, anthropic, gemini, or any (any unless the user named a provider)
+WHY: one short sentence for a non-technical user saying what the AI would do in the app, starting with "to", e.g. "to turn a photo of a receipt into a list of items\""""
+AI_CHECK_CREATE = "this phone app"
+AI_CHECK_REVISE = "this change to their existing phone app"
+
+
+def parse_ai_check(answer: str) -> tuple[bool, str, str]:
+    """(needs AI, provider or "any", why) from the AI_CHECK answer; anything unreadable counts as no AI."""
+    need = re.search(r"^\W*AI\W*:\W*(yes|no)", answer, re.I | re.M)
+    provider = re.search(r"^\W*PROVIDER\W*:\W*(openai|anthropic|gemini|any)", answer, re.I | re.M)
+    why = re.search(r"^\W*WHY\W*:\s*(.+)", answer, re.I | re.M)
+    return (bool(need and need.group(1).lower() == "yes"), provider.group(1).lower() if provider else "any",
+            why.group(1).strip().strip("*`\"")[:200] if why else "")
+
+
 FIX = """Read AGENTS.md. The release build of this app failed. Here is the tail of the build output:
 
 ```
@@ -94,8 +116,8 @@ Fix the cause, run `npx tsc --noEmit` until it passes, and finish with one sente
 def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False) -> str:
     """Run Codex; emit('codex', line) per event, emit('model', name) once; return the final agent message. Raise on failure.
     mcp=True adds REA's MCP server (APK analysis)."""
-    proc = subprocess.Popen(
-        command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    proc = workspace.popen(
+        app, command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, env=playstore.agent_env() if mcp else None,
     )
     proc.stdin.write(prompt)

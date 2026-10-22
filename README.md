@@ -138,7 +138,7 @@ project and a normal git repository: open it in any editor or keep iterating fro
 | Codex model | `VIBE_CODEX_MODEL` (default `gpt-5.6-sol`; the Codex config default is not available on ChatGPT plans) |
 | iOS signing team | Settings → iPhone and iPad signing, or `VIBE_IOS_TEAM` |
 | Claude model | `VIBE_CLAUDE_MODEL` (default: the CLI's own default) |
-| API keys for generated apps | Settings tab, stored in `~/vibeapping/keys.json`, passed to apps as `EXPO_PUBLIC_*` |
+| API keys for generated apps | Settings tab, stored in `~/vibeapping/keys.json`; an app that needs AI asks first, then gets one key as `EXPO_PUBLIC_*` |
 
 Prompts live in `backend/vibe/codex.py` and are shared by both agents. `template/AGENTS.md` is what
 the agent reads inside every generated app. [AGENTS.md](AGENTS.md) is the detailed guide to this code

@@ -5,7 +5,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -20,8 +19,8 @@ from . import build, devices, ios, playstore, settings, workspace
 app = FastAPI(title="vibeApping")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
-TERMINAL = {"ready", "failed", "deployed", "unknown"}
-BUSY = {"created", "preparing", "inspiring", "coding", "building", "fixing"}
+TERMINAL = {"ready", "failed", "cancelled", "deployed", "unknown"}
+BUSY = {"created", "preparing", "inspiring", "checking", "waiting", "coding", "building", "fixing"}
 EVENTS_FILE = "events.jsonl"
 
 
@@ -68,8 +67,8 @@ class KeyValue(BaseModel):
     value: str
 
 
-class KeyToggle(BaseModel):
-    enabled: bool
+class Answer(BaseModel):
+    use_ai: bool
 
 
 @app.get("/settings")
@@ -125,13 +124,6 @@ def check_key(provider: str):
     return {"keys": settings.list_keys()}
 
 
-@app.post("/settings/keys/{provider}/enabled")
-def enable_key(provider: str, body: KeyToggle):
-    _saved(provider)
-    settings.toggle(provider, body.enabled)
-    return {"keys": settings.list_keys()}
-
-
 @app.delete("/settings/keys/{provider}")
 def remove_key(provider: str):
     _provider(provider)
@@ -174,6 +166,9 @@ def get_apps():
         a["apk"] = apk.exists()
         a["apk_mb"] = round(apk.stat().st_size / 1e6, 1) if apk.exists() else None
         a["artifact"] = build.artifact_path(workspace.app_dir(a["id"])).exists()
+        a["ai_used"] = [settings.PROVIDERS[p]["label"] for p in settings.used_providers(workspace.app_dir(a["id"]))]
+        if a["status"] == "waiting" and a.get("question"):  # a key added in Settings meanwhile shows up right away
+            a["question"]["key"] = settings.pick(a["question"]["provider"])
     return apps
 
 
@@ -208,9 +203,7 @@ def post_app(body: NewApp):
                          body.ios_target if body.platform == "ios" else "device",
                          body.ios_device if body.platform == "ios" else "")
     emit(app_id, "status", "created")
-    threading.Thread(target=build.pipeline,
-                     args=(app_id, request, lambda k, t: emit(app_id, k, t), body.agent, name, inspiration),
-                     daemon=True).start()
+    build.start(build.pipeline, app_id, request, lambda k, t: emit(app_id, k, t), body.agent, name, inspiration)
     return {"id": app_id}
 
 
@@ -269,8 +262,38 @@ def post_revise(app_id: str, body: Revise):
         raise HTTPException(409, "app is busy")
     workspace.write_status(app_id, "created")
     emit(app_id, "status", "created")
-    threading.Thread(target=build.revise, args=(app_id, request, lambda k, t: emit(app_id, k, t)), daemon=True).start()
+    build.start(build.revise, app_id, request, lambda k, t: emit(app_id, k, t))
     return {"id": app_id}
+
+
+@app.post("/apps/{app_id}/cancel")
+def post_cancel(app_id: str):
+    """Stop the running create/revise job: kills the agent or build command; a revise is rolled back."""
+    _exists(app_id)
+    if workspace.read_status(app_id)["status"] not in BUSY:
+        raise HTTPException(409, "Nothing is running for this app.")
+    emit(app_id, "build", "cancel requested")
+    if not workspace.cancel(app_id):  # status left over from a backend restart: no job behind it
+        workspace.write_status(app_id, "cancelled")
+        emit(app_id, "status", "cancelled")
+    return {"ok": True}
+
+
+@app.post("/apps/{app_id}/answer")
+def post_answer(app_id: str, body: Answer):
+    """The user's answer to "this app wants to use AI": the paused job carries on with or without the key."""
+    _exists(app_id)
+    st = workspace.read_status(app_id)
+    if st["status"] != "waiting":
+        raise HTTPException(409, "This app is not waiting for an answer.")
+    if body.use_ai and not settings.pick(st["question"]["provider"]):
+        raise HTTPException(400, "Add a working key in Settings first.")
+    if app_id not in workspace.JOBS:  # the backend restarted while the job was waiting
+        workspace.write_status(app_id, "cancelled")
+        emit(app_id, "status", "cancelled")
+        raise HTTPException(409, "This build stopped while it waited. Start it again.")
+    workspace.ANSWERS[app_id] = body.use_ai
+    return {"ok": True}
 
 
 @app.get("/apps/{app_id}/events")

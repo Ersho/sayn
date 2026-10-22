@@ -5,6 +5,8 @@ import plistlib
 import re
 import shutil
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -32,7 +34,7 @@ def artifact_path(app: Path) -> Path:
 
 def _run(app: Path, args: list[str], emit: Emit, cwd: Path | None = None) -> tuple[int, list[str]]:
     emit("build", "$ " + " ".join(args))
-    proc = subprocess.Popen(args, cwd=cwd or app, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    proc = workspace.popen(app, args, cwd=cwd or app, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace", bufsize=1)
     lines: list[str] = []
     for line in proc.stdout:
@@ -142,6 +144,12 @@ def runner(agent: str):
     return claude if agent == "claude" else codex
 
 
+def start(job: Callable, app_id: str, *args) -> None:
+    """Run pipeline() or revise() in the background; registered first so a Cancel right away still finds it."""
+    workspace.JOBS.add(app_id)
+    threading.Thread(target=job, args=(app_id, *args), daemon=True).start()
+
+
 def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: str = "",
              inspiration: dict | None = None) -> None:
     """Create with the chosen agent, then build/fix until the artifact exists. Writes status.json as it goes.
@@ -154,18 +162,48 @@ def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: 
         return codex.CREATE.format(request=request, naming=naming, inspiration=codex.inspiration_block(info))
 
     _job(app_id, emit, agent, prompt, "create", after=lambda message: _apply_name(app_id, message),
-         inspiration=inspiration)
+         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_CREATE, request=request), inspiration=inspiration)
 
 
 def revise(app_id: str, request: str, emit: Emit) -> None:
     """Change an existing app with the agent that wrote it, bump the patch version, rebuild."""
     agent = workspace.read_vibe(app_id).get("agent", "codex")
     _job(app_id, emit, agent, lambda _: codex.REVISE.format(request=request), f"revise: {request[:60]}",
-         after=lambda _: _bump_version(app_id))
+         after=lambda _: _bump_version(app_id), ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request))
+
+
+def _ai_provider(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Emit) -> str | None:
+    """Which AI key the app gets, or None. Asks the user (status "waiting") only when the app needs AI.
+
+    vibe.json "ai" holds the answer: a provider id, or false. An app that already uses AI keeps its key; otherwise
+    the agent judges the request first (AI_CHECK), so apps that need no AI never ask."""
+    app = workspace.app_dir(app_id)
+    vibe = workspace.read_vibe(app_id)
+    used = settings.used_providers(app)  # older apps got keys before vibe.json recorded the answer
+    current = vibe.get("ai") or (used[0] if used and "ai" not in vibe else None)
+    if current and settings.pick(current) == current:
+        workspace.update_vibe(app_id, ai=current)
+        return current
+    if current:
+        need, wanted, why = True, current, "to keep its AI features working (its key is no longer saved)"
+    else:
+        status("checking")
+        need, wanted, why = codex.parse_ai_check(run(app, ai_check, emit))
+        if not need:
+            workspace.update_vibe(app_id, ai=False)
+            return None
+    status("waiting", question={"why": why, "provider": wanted})
+    while app_id not in workspace.ANSWERS:
+        workspace.check_cancelled(app_id)
+        time.sleep(0.5)
+    provider = settings.pick(wanted) if workspace.ANSWERS.pop(app_id) else None
+    emit("build", f"AI: {provider or 'not used'}")
+    workspace.update_vibe(app_id, ai=provider or False)
+    return provider
 
 
 def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], str], commit: str,
-         after: Callable[[str], None], inspiration: dict | None = None) -> None:
+         after: Callable[[str], None], ai_check: str, inspiration: dict | None = None) -> None:
     app = workspace.app_dir(app_id)
     agent_run = runner(agent).run
 
@@ -182,18 +220,21 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], st
         return agent_run(app, prompt, on_event, mcp=mcp)
 
     def status(s: str, **extra):
+        workspace.check_cancelled(app_id)
         workspace.write_status(app_id, s, **extra)
         emit("status", s)
 
+    before = workspace.head(app)
     try:
         status("preparing")
         workspace.install_node_modules(app)
-        key_names = settings.write_env(app)  # API keys switched on in Settings, as EXPO_PUBLIC_* in the app's .env
         info = None
         if inspiration:
             status("inspiring")
             info = playstore.save_inspiration(app, inspiration["app_id"], inspiration["apk"], inspiration["reviews"], emit)
             workspace.update_vibe(app_id, inspiration=info)
+        # the one key the user agreed to, as EXPO_PUBLIC_* in the app's .env
+        key_names = settings.write_env(app, _ai_provider(app_id, ai_check, run, status, emit))
         status("coding")
         message = run(app, prompt(info) + settings.keys_block(key_names), emit, mcp=bool(info and info["apk"]))
         if commit == "create":
@@ -223,7 +264,19 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], st
             export_preview(app, emit)
             status("ready", fix_rounds=round_, summary=summary.strip()[:1000])
     except Exception as e:  # noqa: BLE001
-        status("failed", error=str(e)[-4000:])
+        if app_id not in workspace.CANCELLED:
+            workspace.write_status(app_id, "failed", error=str(e)[-4000:])
+            emit("status", "failed")
+        else:
+            if commit != "create":  # a cancelled revise puts the app back to how it was before
+                try:
+                    workspace.rollback(app, before)
+                except subprocess.CalledProcessError as git_error:
+                    emit("build", f"could not restore the previous version: {git_error}")
+            workspace.write_status(app_id, "cancelled")
+            emit("status", "cancelled")
+    finally:
+        workspace.end_job(app_id)
 
 
 def _bump_version(app_id: str) -> None:
