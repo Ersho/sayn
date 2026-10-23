@@ -12,7 +12,7 @@ type App = {
   fix_rounds?: number; version: string; build: number; created: number; updated: number;
   history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
   inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean };
-  ai_used: string[]; question?: { why: string; provider: string; key: string | null };
+  ai_used: string[]; online?: string; question?: { why: string; provider: string; key: string | null };
 };
 type StoreApp = {
   appId: string; title: string; developer: string; icon: string; score: number | null; installs: string | null;
@@ -90,6 +90,7 @@ const I = {
   claude: <svg viewBox="0 0 20 20"><path d="M10 3v14M3 10h14M5 5l10 10M15 5L5 15" /></svg>,
   codex: <svg viewBox="0 0 20 20"><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z" /><path d="M10 6.5l3 1.75v3.5L10 13.5l-3-1.75v-3.5z" /></svg>,
   bulb: <svg viewBox="0 0 20 20"><path d="M7 14.5a5.5 5.5 0 1 1 6 0V16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1z" /><path d="M8.5 18.5h3" /></svg>,
+  globe: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M2.5 10h15M10 2.5c2.2 2.2 2.2 12.8 0 15M10 2.5c-2.2 2.2-2.2 12.8 0 15" /></svg>,
   gear: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>,
   star: <svg viewBox="0 0 20 20"><path d="M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z" fill="currentColor" /></svg>,
 };
@@ -295,6 +296,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
           <p className="inspired-by"><img src={storeImg(app.inspiration.icon, 64)} alt="" />Inspired by {app.inspiration.title}{app.inspiration.apk ? " (studied the original app)" : ""}</p>
         )}
         {app.ai_used.length > 0 && <p className="uses-ai" title="Each use is billed to your API key"><Icon i={I.bulb} />Uses AI · {app.ai_used.join(", ")}</p>}
+        {app.online && <p className="uses-ai" title="Free public data, looked up over the internet"><Icon i={I.globe} />Uses internet · {app.online}</p>}
         {phones.length > 0 &&<p className="installed"><Icon i={I.check} />Installed on {phones.join(", ")}</p>}
         <AiQuestion app={app} reload={reload} go={go} />
         {app.status === "failed" && <details className="fail"><summary>Build failed, show details</summary><pre>{app.error}</pre></details>}

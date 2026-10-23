@@ -55,13 +55,13 @@ CREATE = """Read AGENTS.md and vibe.json. Build the app the user asked for:
 {naming} Set the name as "expo.name" in app.json. Implement the whole app, run `npx tsc --noEmit` until it passes, then finish. The first line of your final message must be `NAME: <the app name>`, followed by one short paragraph describing what the app does, written for a non-technical user. Do not mention TypeScript, code, builds or files."""
 
 INSPIRE = """
-The user was inspired by the Play Store app "{title}". Its store description{reviews_where} is in inspiration/listing.md and its store screenshots are inspiration/screenshot-*.png; read the listing and look at the screenshots before you start. Build your own app that serves the same purpose: cover its main features{reviews_how} and use a similar screen layout where it makes sense. Keep it to what a small offline app can do (no accounts, servers, ads or payments). Do not reuse the original's name, branding, icon, images or text: this is a new app with its own name.
+The user was inspired by the Play Store app "{title}". Its store description{reviews_where} is in inspiration/listing.md and its store screenshots are inspiration/screenshot-*.png; read the listing and look at the screenshots before you start. Build your own app that serves the same purpose: cover its main features{reviews_how} and use a similar screen layout where it makes sense. No accounts, ads or payments. Apps like this usually keep their main content on their servers or behind a subscription (a library of books, a food database, lessons, recipes, plans); do not copy that content and do not shrink it to a small fixed list either: fill it as the "Content and data" section of AGENTS.md describes. Do not reuse the original's name, branding, icon, images or text: this is a new app with its own name.
 """
 REVIEWS_WHERE = " and a selection of user reviews"
 REVIEWS_HOW = ", keep what the reviews praise, fix what they complain about,"
 
 INSPIRE_APK = """
-The original app's APK is at inspiration/app.apk and you have the `rea` tools (inspect_android_package, search_android_classes, inspect_android_class, inspect_android_method). Before writing code, use them to learn how the original is structured: its activities and screens, navigation, data model and the features it really has. Write what you learned as a short functional spec to inspiration/spec.md (screens, features, data), then build from that spec. The APK is for understanding behaviour only: never copy code, strings, assets, package names or identifiers out of it.
+The original app's APK is at inspiration/app.apk and you have the `rea` tools (inspect_android_package, search_android_classes, inspect_android_class, inspect_android_method). Before writing code, use them to learn how the original is structured: its activities and screens, navigation, data model and the features it really has. Write what you learned as a short functional spec to inspiration/spec.md (screens, features, data, and a "Content sources" section: what content the original serves from its servers or premium tier, and where your version gets each kind), then build from that spec. The APK is for understanding behaviour only: never copy code, strings, assets, package names or identifiers out of it.
 """
 
 
@@ -87,21 +87,50 @@ AI_CHECK = """Do not change any files and do not run any commands; only answer. 
 
 {request}
 
-Decide whether the app needs an AI model from an online API (OpenAI, Anthropic Claude or Google Gemini) to do what the user asked, for example to chat, understand or write text, summarise, translate, or recognise what is in a photo. Ordinary app logic, storage, lists, timers, charts, reminders and phone features do not need AI. Answer with exactly these three lines and nothing else:
+First think about where the app's content comes from. Many popular apps are valuable because of content they keep on their servers or behind a subscription: a library of book summaries, lessons and exercises, recipes, workout plans, a food or product database. This app cannot copy that, so it fills the gap another way:
+- Facts that must be true (nutrition values, barcodes, book titles and covers, places, exchange rates) come from a free public service that needs no key or account, if a well-known one exists (for example Open Food Facts, Open Library, Wikipedia).
+- Written content (summaries, explanations, lessons, exercises, plans, stories, feedback) can be written by the user's own AI on request, so the app never runs out.
+
+Then decide:
+1. Does the app need an AI model from an online API (OpenAI, Anthropic Claude or Google Gemini)? Yes when the user asked for something like chat, understanding or writing text, summarising, translating or recognising what is in a photo, and also when the AI would write the app's main content on request as described above. Ordinary app logic, storage, lists, timers, charts, reminders and phone features do not need AI.
+2. Does the app need a free public data service for facts as described above? Name at most one, and only one you know exists and needs no key.
+
+Answer with exactly these four lines and nothing else:
 AI: yes or no
 PROVIDER: openai, anthropic, gemini, or any (any unless the user named a provider)
-WHY: one short sentence for a non-technical user saying what the AI would do in the app, starting with "to", e.g. "to turn a photo of a receipt into a list of items\""""
+WHY: one short sentence for a non-technical user saying what the AI would do in the app, starting with "to", e.g. "to write a summary of any book you add"
+ONLINE: the name of the free public data service, or none"""
+AI_CHECK_LISTING = """
+
+The app is modelled on a Play Store app. Weigh its features too, especially the ones it calls AI, smart or automatic, and the content it serves. Its store listing:
+
+{listing}
+
+Now answer with exactly the four lines described above."""
 AI_CHECK_CREATE = "this phone app"
 AI_CHECK_REVISE = "this change to their existing phone app"
 
 
-def parse_ai_check(answer: str) -> tuple[bool, str, str]:
-    """(needs AI, provider or "any", why) from the AI_CHECK answer; anything unreadable counts as no AI."""
+def parse_ai_check(answer: str) -> tuple[bool, str, str, str]:
+    """(needs AI, provider or "any", why, online service or "") from the AI_CHECK answer; anything unreadable counts
+    as no AI and no service."""
     need = re.search(r"^\W*AI\W*:\W*(yes|no)", answer, re.I | re.M)
     provider = re.search(r"^\W*PROVIDER\W*:\W*(openai|anthropic|gemini|any)", answer, re.I | re.M)
     why = re.search(r"^\W*WHY\W*:\s*(.+)", answer, re.I | re.M)
+    online = re.search(r"^\W*ONLINE\W*:\s*(.+)", answer, re.I | re.M)
+    service = online.group(1).strip().strip("*`\".") if online else ""
     return (bool(need and need.group(1).lower() == "yes"), provider.group(1).lower() if provider else "any",
-            why.group(1).strip().strip("*`\"")[:200] if why else "")
+            why.group(1).strip().strip("*`\"")[:200] if why else "",
+            "" if service.lower() in ("", "none", "no", "n/a") else service[:60])
+
+
+def online_block(service: str) -> str:
+    """Prompt text naming the one free public data service the app may call, or none."""
+    if not service:
+        return "\nThis app uses no online data service. Do not call one.\n"
+    return (f"\nThis app may use {service} over the internet (free, no key). Before relying on it, make one real "
+            "request to it from the command line so you use its actual response format. Save what the user looks up "
+            "on the phone so it works offline afterwards. Do not call any other online data service.\n")
 
 
 FIX = """Read AGENTS.md. The release build of this app failed. Here is the tail of the build output:

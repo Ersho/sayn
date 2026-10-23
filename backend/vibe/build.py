@@ -172,26 +172,33 @@ def revise(app_id: str, request: str, emit: Emit) -> None:
          after=lambda _: _bump_version(app_id), ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request))
 
 
-def _ai_provider(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Emit) -> str | None:
-    """Which AI key the app gets, or None. Asks the user (status "waiting") only when the app needs AI.
+def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Emit) -> tuple[str | None, str]:
+    """(AI key the app gets or None, free online data service or ""). Asks the user (status "waiting") only when
+    the app needs AI.
 
-    vibe.json "ai" holds the answer: a provider id, or false. An app that already uses AI keeps its key; otherwise
-    the agent judges the request first (AI_CHECK), so apps that need no AI never ask."""
+    The agent judges the request first (AI_CHECK). vibe.json "ai" holds the AI answer: a provider id, or false; an
+    app that already uses AI keeps its key. vibe.json "online" names the data service; a revision keeps the old one."""
     app = workspace.app_dir(app_id)
     vibe = workspace.read_vibe(app_id)
     used = settings.used_providers(app)  # older apps got keys before vibe.json recorded the answer
     current = vibe.get("ai") or (used[0] if used and "ai" not in vibe else None)
+    status("checking")
+    listing = app / "inspiration" / "listing.md"  # an inspired app's request is one line; its features are here
+    if listing.exists():
+        ai_check += codex.AI_CHECK_LISTING.format(listing=listing.read_text("utf-8")[:6000])
+    need, wanted, why, online = codex.parse_ai_check(run(app, ai_check, emit))
+    online = online or vibe.get("online", "")
+    if online:
+        emit("build", f"online data: {online}")
+        workspace.update_vibe(app_id, online=online)
     if current and settings.pick(current) == current:
         workspace.update_vibe(app_id, ai=current)
-        return current
+        return current, online
     if current:
         need, wanted, why = True, current, "to keep its AI features working (its key is no longer saved)"
-    else:
-        status("checking")
-        need, wanted, why = codex.parse_ai_check(run(app, ai_check, emit))
-        if not need:
-            workspace.update_vibe(app_id, ai=False)
-            return None
+    elif not need:
+        workspace.update_vibe(app_id, ai=False)
+        return None, online
     status("waiting", question={"why": why, "provider": wanted})
     while app_id not in workspace.ANSWERS:
         workspace.check_cancelled(app_id)
@@ -199,7 +206,7 @@ def _ai_provider(app_id: str, ai_check: str, run: Callable, status: Callable, em
     provider = settings.pick(wanted) if workspace.ANSWERS.pop(app_id) else None
     emit("build", f"AI: {provider or 'not used'}")
     workspace.update_vibe(app_id, ai=provider or False)
-    return provider
+    return provider, online
 
 
 def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], str], commit: str,
@@ -233,10 +240,11 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], st
             status("inspiring")
             info = playstore.save_inspiration(app, inspiration["app_id"], inspiration["apk"], inspiration["reviews"], emit)
             workspace.update_vibe(app_id, inspiration=info)
-        # the one key the user agreed to, as EXPO_PUBLIC_* in the app's .env
-        key_names = settings.write_env(app, _ai_provider(app_id, ai_check, run, status, emit))
+        provider, online = _check(app_id, ai_check, run, status, emit)
+        key_names = settings.write_env(app, provider)  # the one key the user agreed to, as EXPO_PUBLIC_* in .env
         status("coding")
-        message = run(app, prompt(info) + settings.keys_block(key_names), emit, mcp=bool(info and info["apk"]))
+        message = run(app, prompt(info) + settings.keys_block(key_names) + codex.online_block(online), emit,
+                      mcp=bool(info and info["apk"]))
         if commit == "create":
             changes = subprocess.run(["git", "status", "--porcelain", "--", "app", "src", "modules"],
                                      cwd=app, capture_output=True, text=True, check=True)

@@ -25,14 +25,24 @@ You are building a mobile app for the platform in vibe.json inside a fixed Expo 
 
 - For Android, declare every Android permission in `app.json` (`android.permissions` and plugin options) and request it at runtime before use.
 - For iOS, declare privacy usage descriptions in `ios.infoPlist` and request the relevant permission before use. Native modules must support the chosen platform.
-- The app must work fully offline unless the request is explicitly an AI or online app. Persist data locally (`@react-native-async-storage/async-storage` or `expo-sqlite`).
+- Persist data locally (`@react-native-async-storage/async-storage` or `expo-sqlite`). The app works without internet, except for the AI keys and the online data service the task prompt names, and even then everything already saved stays usable offline.
 - Keep the UI simple and usable: readable text, sensible padding, respects safe areas.
 - The dashboard also runs the app in a browser (react-native-web) as a preview before install. Keep screens working there: guard native-only modules with `Platform.OS !== "web"` instead of crashing.
 - No placeholder screens. Implement what was asked, end to end.
 
+## Content and data
+
+Before you build, work out where the app's content comes from. An app whose value is content (book summaries, lessons, exercises, recipes, workout plans, a food or product database) must not stop at a small fixed list you wrote in the code. Fill it from these sources, in this order:
+
+1. **Facts that must be true** (nutrition values, barcodes, book titles and covers, places, prices): the online data service named in the task prompt, if there is one, or what the user enters.
+2. **Written content** (summaries, explanations, lessons, exercises, plans, stories, feedback): the user's AI key, if the task prompt lists one. Write it when the user asks (for example "Add a book", "More exercises"), save it on the phone, reuse it instead of asking again, mark it as written by AI, and let the user regenerate it.
+3. **The user's own input**: let them add and edit their own items.
+
+Ship a small built-in starter set so the app is useful on first open and offline, but treat it as the floor, not the whole app: the user must be able to get new content inside the app, without a new build. Never let AI invent facts or numbers that must be true, such as nutrition values, prices, doses or dates. Never show made-up data as if it were real. When an online request fails, say so plainly and keep everything saved usable.
+
 ## API keys
 
-If the task prompt lists API key variables, they are in `.env` (never commit or print it) and readable as `process.env.EXPO_PUBLIC_...`. Use them only for requests that need that provider. Never write a key into source files.
+If the task prompt lists API key variables, they are in `.env` (never commit or print it) and readable as `process.env.EXPO_PUBLIC_...`. Never write a key into source files.
 
 ## Before you finish
 
