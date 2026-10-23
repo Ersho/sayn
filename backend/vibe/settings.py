@@ -142,5 +142,6 @@ def keys_block(names: list[str]) -> str:
                 "AI, build the closest version that works without it.\n")
     return ("\nThe user agreed that this app uses AI. These API keys are available as `process.env.<NAME>` "
             "(Expo inlines `EXPO_PUBLIC_*` variables at build time): " + ", ".join(names)
-            + ". Use one only if the request really needs that provider, read it through process.env, and never "
-            "write a key into source files.\n")
+            + ". Use the AI for what the request asks and to write the app's content on request, as the \"Content "
+            "and data\" section of AGENTS.md describes. Read the key through process.env and never write it into "
+            "source files.\n")
