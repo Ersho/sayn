@@ -1,33 +1,48 @@
 <h1 align="center">sayn</h1>
 <p align="center"><b>Subscriptions Are All You Need.</b><br>
 
-See an app you like, click <b>Make my own</b>, and five minutes later your own version is on your phone. No ads, no paywall, no app store. Free, open source, runs on your laptop.</p>
+You already pay for Claude or ChatGPT. That subscription can write the apps you are paying ten other subscriptions for. sayn points it at the Play Store and installs the result on your phone.</p>
 
 <p align="center"><img src="docs/how-it-works.svg" alt="1. Pick a Play Store app and click Make my own. 2. Your coding agent writes, builds and installs it from your laptop. 3. Your own version, without ads or subscription, opens on your phone." width="960"></p>
 
-Found a habit tracker that wants $6.99 a month? A flashlight with three ad banners? A to-do app
-that almost fits but not quite? Pick it in sayn, write one line about what you want different,
-and your coding agent builds your own version and installs it on the phone plugged into your
-laptop. Don't need a template? Just describe the app in a sentence.
+## Why
 
----
+I use CapCut for video editing. It adds watermarks, and to remove them and unlock most of the
+features I need, I have to buy premium. But I already pay for Codex and Claude. Most premium utility
+apps don't depend on their own database or servers, so a coding agent can make a version of them in
+5 to 10 minutes. sayn does that and installs it on my phone. I have cancelled subscription of around 
+25 apps.
 
-sayn costs nothing and has no sayn account. iOS device installs additionally need an Apple account for signing. It uses the coding agent you already have, Claude Code or
-Codex CLI, billed to the Claude or ChatGPT plan you already pay for. sayn is the factory around it:
+### AI features
 
-- **Describe it.** One paragraph in a local dashboard. Codex CLI or Claude Code writes a real Expo /
-  React Native app, your laptop builds it, and sayn installs and launches it on the phone on your desk.
-  Android uses a signed release APK; iOS uses Xcode and Apple development signing.
-- **Or search the Play Store and make your own.** Browse the top charts or search any app, pick it,
-  add your notes. The agent builds your version from the store listing, screenshots and reviews. Tick
-  one box and [REA](https://github.com/morluto/rea) analyses the real APK into a feature spec
-  (screens, flows, data) that the agent builds from. It never copies the original's code. No ads, no in-app purchases, no
-  subscription, and it is yours. Names, branding, assets and code are never copied.
-- **Change it any time.** Every app has a text box for the next change. The agent edits the code, the
-  version bumps, the app rebuilds and reinstalls. Each run is a git commit inside the app folder.
+Some premium features are AI, like auto-captions or summaries. Apps can use AI in two ways:
 
-Everything runs on your machine. No cloud sandbox, no account, no API key, no per-app cost. The only
-thing that leaves your laptop is the conversation your agent already has with its provider.
+- **API key.** Save an OpenAI, Anthropic or Gemini key in sayn, and the app calls the model directly
+  at API prices.
+- **Subscription** *(coming soon)*. The app uses the same Claude or ChatGPT plan that wrote it,
+  through a small SDK that talks to sayn on the laptop. No key needed.
+
+## How you use it
+
+- **Make my own.** Browse the Play Store's top charts or search any app, pick it and write what you
+  want different ("no account, add auto-captions, drop the templates"). The agent builds your version
+  from the listing, screenshots and reviews. Tick one box and [REA](https://github.com/morluto/rea)
+  analyses the real APK into a feature spec (screens, flows, data) to build from. Names, branding,
+  assets and code are never copied.
+- **Describe it.** No original needed: one paragraph in the dashboard is enough.
+- **Change it any time.** Every app has a box for the next change. The agent edits the code, the app
+  rebuilds and reinstalls in place. Each change is a git commit inside the app folder.
+
+Before coding, the agent decides whether the app needs AI. If it does, sayn tells you why and asks
+before giving it a key; otherwise the app gets no key at all.
+
+## What it costs
+
+Nothing beyond what you already have. sayn is free and open source, has no account and runs on your
+laptop. The code is written by Codex CLI or Claude Code on the ChatGPT or Claude plan you already pay
+for. Android apps install as signed release APKs; iPhone and iPad apps need a Mac and a (free) Apple
+account. The only thing that leaves your laptop is the conversation your agent already has with its
+provider, plus whatever API calls the apps you build choose to make.
 
 ## Quick start
 
