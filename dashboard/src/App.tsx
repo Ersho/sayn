@@ -13,7 +13,9 @@ type App = {
   history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
   inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean };
   ai_used: string[]; online?: string; question?: { why: string; provider: string; key: string | null };
+  plan?: Plan; held?: boolean; features?: string[];
 };
+type Plan = { name: string; features: string[]; extras: string[] };
 type StoreApp = {
   appId: string; title: string; developer: string; icon: string; score: number | null; installs: string | null;
   genre: string | null; summary: string;
@@ -49,11 +51,12 @@ function ago(t: number) {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", checking: "Checking for AI",
-  waiting: "Needs your answer", coding: "Writing code", building: "Building",
+  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", checking: "Understanding features",
+  waiting: "Needs your answer", reviewing: "Waiting for your review", coding: "Writing code", building: "Building",
   fixing: "Fixing build", ready: "Ready to install", failed: "Failed", cancelled: "Cancelled", unknown: "Imported",
 };
-const BUSY = new Set(["created", "preparing", "inspiring", "checking", "waiting", "coding", "building", "fixing"]);
+const BUSY = new Set(["created", "preparing", "inspiring", "checking", "waiting", "reviewing", "coding", "building", "fixing"]);
+const BEFORE_CODE = new Set(["created", "preparing", "inspiring", "checking", "waiting"]);
 const PROVIDER_LABEL: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic (Claude)", gemini: "Google Gemini" };
 const CATEGORY_LABEL: Record<string, string> = {
   PRODUCTIVITY: "Productivity", HEALTH_AND_FITNESS: "Health & fitness", LIFESTYLE: "Lifestyle", TOOLS: "Tools",
@@ -92,6 +95,7 @@ const I = {
   bulb: <svg viewBox="0 0 20 20"><path d="M7 14.5a5.5 5.5 0 1 1 6 0V16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1z" /><path d="M8.5 18.5h3" /></svg>,
   globe: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M2.5 10h15M10 2.5c2.2 2.2 2.2 12.8 0 15M10 2.5c-2.2 2.2-2.2 12.8 0 15" /></svg>,
   gear: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>,
+  pause: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M8.25 7v6M11.75 7v6" /></svg>,
   star: <svg viewBox="0 0 20 20"><path d="M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z" fill="currentColor" /></svg>,
 };
 const Icon = ({ i, className }: { i: ReactNode; className?: string }) => <span className={`ic ${className ?? ""}`}>{i}</span>;
@@ -137,7 +141,7 @@ function useJob(id: string, reload: () => void) {
 
 /* ---------- small pieces ---------- */
 function Badge({ status }: { status: string }) {
-  const busy = BUSY.has(status) && status !== "waiting";
+  const busy = BUSY.has(status) && status !== "waiting" && status !== "reviewing";
   return (
     <span className={`badge badge-${busy ? "busy" : status}`}>
       {status === "ready" ? <Icon i={I.check} /> : busy ? <span className="dot" /> : null}
@@ -153,11 +157,12 @@ function Progress({ status, log, inspired }: { status: string; log: string[]; in
   const keys = ["preparing", ...(inspired ? ["inspiring"] : []), "checking", "coding", "building", "ready"];
   const label: Record<string, string> = {
     preparing: "Preparing project", inspiring: "Studying the original app",
-    checking: status === "waiting" ? "Waiting for your answer" : "Checking if it needs AI", coding: "Writing the code",
+    checking: status === "waiting" ? "Waiting for your answer" : status === "reviewing" ? "Waiting for your review" : "Understanding the features",
+    coding: "Writing the code",
     building: status === "fixing" ? "Fixing the build" : "Building the app", ready: "Ready to install",
   };
   const steps = keys.map((k) => label[k]);
-  const idx = keys.indexOf(status === "fixing" ? "building" : status === "waiting" ? "checking" : status);
+  const idx = keys.indexOf(status === "fixing" ? "building" : status === "waiting" || status === "reviewing" ? "checking" : status);
   return (
     <div className="progress">
       <ol className="steps">
@@ -200,6 +205,96 @@ function AiQuestion({ app, reload, go }: { app: App; reload: () => void; go?: (v
         {q.key
           ? <button className="primary" disabled={sending} onClick={() => answer(true)}>Use AI</button>
           : go && <button className="primary" onClick={() => go("settings")}>Add a key in Settings</button>}
+      </div>
+    </div>
+  );
+}
+
+/** "Stop and review features" while a new app is being made, and the review itself once the job waits in "reviewing". */
+function Features({ app, reload }: { app: App; reload: () => void }) {
+  const [sending, setSending] = useState(false);
+  const creating = !app.history.some((h) => /^(codex|claude): create$/.test(h.message));
+  const holdable = creating && (BEFORE_CODE.has(app.status) || (app.status === "coding" && !!app.plan));
+  if (app.status === "reviewing" && app.plan) return <FeatureReview key={app.id} app={app} plan={app.plan} reload={reload} />;
+  if (!holdable) return null;
+  const hold = async () => {
+    if (app.status === "coding" && !confirm("Pause writing the code to review the features? It starts again after your review.")) return;
+    setSending(true);
+    try { await api(`/apps/${app.id}/hold`, { method: "POST" }); }
+    catch (e) { alert(String(e)); }
+    setSending(false);
+    reload();
+  };
+  const coding = app.status === "coding";
+  return (
+    <div className="features">
+      <div className={`pause-card${app.held ? " on" : ""}`}>
+        <Icon i={app.held ? I.check : I.pause} />
+        <div className="grow">
+          <b>{app.held ? "Pausing when the features are found" : coding ? "Pause to review the features" : "Pause when the features are found"}</b>
+          <p>{app.held ? "You can review and change them before any code is written."
+            : coding ? "Writing the code starts again after your review."
+            : "If you don’t press it, your app is built automatically."}</p>
+        </div>
+        {!app.held && <button className="outline" disabled={sending} onClick={hold}>Pause</button>}
+      </div>
+      {app.plan && coding && (
+        <details>
+          <summary>{app.plan.features.length} features found</summary>
+          <ul>{app.plan.features.map((f, i) => <li key={i}>{f}</li>)}</ul>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function FeatureReview({ app, plan, reload }: { app: App; plan: Plan; reload: () => void }) {
+  const [name, setName] = useState(plan.name);
+  const [features, setFeatures] = useState(plan.features.map((text) => ({ text, on: true })));
+  const [extras, setExtras] = useState(plan.extras.map((text) => ({ text, on: false })));
+  const [own, setOwn] = useState("");
+  const [sending, setSending] = useState(false);
+  const chosen = [...features, ...extras].filter((x) => x.on).map((x) => x.text);
+  const add = () => {
+    if (!own.trim()) return;
+    setFeatures((l) => [...l, { text: own.trim(), on: true }]);
+    setOwn("");
+  };
+  const build = async () => {
+    setSending(true);
+    try {
+      await api(`/apps/${app.id}/plan`, { method: "POST", body: JSON.stringify({
+        name, features: chosen, extras: [...features, ...extras].filter((x) => !x.on).map((x) => x.text) }) });
+    } catch (e) { alert(String(e)); }
+    setSending(false);
+    reload();
+  };
+  const list = (items: { text: string; on: boolean }[], set: (f: (l: { text: string; on: boolean }[]) => { text: string; on: boolean }[]) => void) => (
+    <ul className="checks">
+      {items.map((x, i) => (
+        <li key={i}><label>
+          <input type="checkbox" checked={x.on} onChange={() => set((l) => l.map((y, j) => (j === i ? { ...y, on: !y.on } : y)))} />{x.text}
+        </label></li>
+      ))}
+    </ul>
+  );
+  return (
+    <div className="ai-ask features review">
+      <b><Icon i={I.check} />Here is what your app will have</b>
+      <p className="field-label">Name</p>
+      <input className="name-input" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="Let the assistant pick" />
+      <p className="field-label">Features</p>
+      {list(features, setFeatures)}
+      {extras.length > 0 && <>
+        <p className="field-label">You could also add</p>
+        {list(extras, setExtras)}
+      </>}
+      <div className="add-row">
+        <input value={own} onChange={(e) => setOwn(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add your own feature…" maxLength={120} />
+        <button className="outline" onClick={add} disabled={!own.trim()}>Add</button>
+      </div>
+      <div className="row-end">
+        <button className="primary" disabled={sending || chosen.length === 0} onClick={build}>Build with these features <Icon i={I.arrow} /></button>
       </div>
     </div>
   );
@@ -299,6 +394,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
         {app.online && <p className="uses-ai" title="Free public data, looked up over the internet"><Icon i={I.globe} />Uses internet · {app.online}</p>}
         {phones.length > 0 &&<p className="installed"><Icon i={I.check} />Installed on {phones.join(", ")}</p>}
         <AiQuestion app={app} reload={reload} go={go} />
+        <Features app={app} reload={reload} />
         {app.status === "failed" && <details className="fail"><summary>Build failed, show details</summary><pre>{app.error}</pre></details>}
         <button className="link" onClick={() => setHistory((v) => !v)}>Version history <Icon i={I.arrow} /></button>
         {history && (
@@ -342,6 +438,10 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
             {app.screenshot && app.reference_shots.length > 0 && <p className="muted small">First: your app on the device. The rest: the original app's Play Store screenshots.</p>}
             <p className="field-label">What it does</p>
             <p className="full-desc">{app.summary || app.request}</p>
+            {app.features && app.features.length > 0 && (<>
+              <p className="field-label">Features</p>
+              <ul className="feature-list">{app.features.map((f, i) => <li key={i}>{f}</li>)}</ul>
+            </>)}
             {app.summary && app.request && (<>
               <p className="field-label">Your original request</p>
               <p className="full-desc">{app.request}</p>
@@ -789,6 +889,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
             </div>
             <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} />
             {app && <AiQuestion app={app} reload={reload} go={go} />}
+            {app && <Features app={app} reload={reload} />}
             {app && running && <div className="row-end"><CancelButton app={app} reload={reload} /></div>}
             {app && !BUSY.has(app.status) && (
               <div className="row-end">

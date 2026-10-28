@@ -20,7 +20,8 @@ app = FastAPI(title="vibeApping")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
 TERMINAL = {"ready", "failed", "cancelled", "deployed", "unknown"}
-BUSY = {"created", "preparing", "inspiring", "checking", "waiting", "coding", "building", "fixing"}
+BUSY = {"created", "preparing", "inspiring", "checking", "waiting", "reviewing", "coding", "building", "fixing"}
+HOLDABLE = {"created", "preparing", "inspiring", "checking", "waiting", "coding"}  # before the code is finished
 EVENTS_FILE = "events.jsonl"
 
 
@@ -69,6 +70,12 @@ class KeyValue(BaseModel):
 
 class Answer(BaseModel):
     use_ai: bool
+
+
+class Plan(BaseModel):
+    name: str = ""
+    features: list[str]
+    extras: list[str] = []  # suggestions the user left out, kept as ideas for later
 
 
 @app.get("/settings")
@@ -167,6 +174,7 @@ def get_apps():
         a["apk_mb"] = round(apk.stat().st_size / 1e6, 1) if apk.exists() else None
         a["artifact"] = build.artifact_path(workspace.app_dir(a["id"])).exists()
         a["ai_used"] = [settings.PROVIDERS[p]["label"] for p in settings.used_providers(workspace.app_dir(a["id"]))]
+        a["held"] = a["id"] in workspace.HOLDS
         if a["status"] == "waiting" and a.get("question"):  # a key added in Settings meanwhile shows up right away
             a["question"]["key"] = settings.pick(a["question"]["provider"])
     return apps
@@ -293,6 +301,37 @@ def post_answer(app_id: str, body: Answer):
         emit(app_id, "status", "cancelled")
         raise HTTPException(409, "This build stopped while it waited. Start it again.")
     workspace.ANSWERS[app_id] = body.use_ai
+    return {"ok": True}
+
+
+@app.post("/apps/{app_id}/hold")
+def post_hold(app_id: str):
+    """"Stop and review features": the new app's job pauses once its features are known. During coding this stops
+    the agent; it starts over after the review."""
+    _exists(app_id)
+    st = workspace.read_status(app_id)
+    if app_id not in workspace.JOBS or st["status"] not in HOLDABLE or (st["status"] == "coding" and not st.get("plan")):
+        raise HTTPException(409, "This build can't stop for a review now.")
+    emit(app_id, "build", "feature review requested")
+    workspace.hold(app_id, stop_agent=st["status"] == "coding")
+    return {"ok": True}
+
+
+@app.post("/apps/{app_id}/plan")
+def post_plan(app_id: str, body: Plan):
+    """The features the user confirmed: the paused job writes the code for exactly these."""
+    _exists(app_id)
+    if workspace.read_status(app_id)["status"] != "reviewing":
+        raise HTTPException(409, "This app is not waiting for a feature review.")
+    features = [f.strip()[:120] for f in body.features if f.strip()][:20]
+    if not features:
+        raise HTTPException(400, "Keep at least one feature.")
+    if app_id not in workspace.JOBS:  # the backend restarted while the job was waiting
+        workspace.write_status(app_id, "cancelled")
+        emit(app_id, "status", "cancelled")
+        raise HTTPException(409, "This build stopped while it waited. Start it again.")
+    workspace.PLANS[app_id] = {"name": body.name.strip()[:40], "features": features,
+                               "extras": [e.strip()[:120] for e in body.extras if e.strip()][:10]}
     return {"ok": True}
 
 

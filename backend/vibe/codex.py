@@ -51,7 +51,7 @@ def command(app: Path, mcp: bool = False) -> list[str]:
 CREATE = """Read AGENTS.md and vibe.json. Build the app the user asked for:
 
 {request}
-{inspiration}
+{inspiration}{features}
 {naming} Set the name as "expo.name" in app.json. Implement the whole app, run `npx tsc --noEmit` until it passes, then finish. The first line of your final message must be `NAME: <the app name>`, followed by one short paragraph describing what the app does, written for a non-technical user. Do not mention TypeScript, code, builds or files."""
 
 INSPIRE = """
@@ -74,7 +74,8 @@ def inspiration_block(info: dict | None) -> str:
             + (INSPIRE_APK if info.get("apk") else ""))
 
 
-NAME_PICK = "Pick a short, fitting app name."
+NAME_PICK = ('Pick a plain name of one to three words that says what the app does, like "Book Ideas", "Calorie Counter" '
+             'or "Video Editor": not a made-up brand and not the name of an existing app.')
 NAME_GIVEN = 'The user wants the app to be called "{name}"; use exactly that name.'
 
 REVISE = """Read AGENTS.md and vibe.json. This app already exists and works. The user asks for this change:
@@ -95,18 +96,48 @@ Then decide:
 1. Does the app need an AI model from an online API (OpenAI, Anthropic Claude or Google Gemini)? Yes when the user asked for something like chat, understanding or writing text, summarising, translating or recognising what is in a photo, and also when the AI would write the app's main content on request as described above. Ordinary app logic, storage, lists, timers, charts, reminders and phone features do not need AI.
 2. Does the app need a free public data service for facts as described above? Name at most one, and only one you know exists and needs no key.
 
-Answer with exactly these four lines and nothing else:
+Answer with exactly these lines and nothing else:
 AI: yes or no
 PROVIDER: openai, anthropic, gemini, or any (any unless the user named a provider)
 WHY: one short sentence for a non-technical user saying what the AI would do in the app, starting with "to", e.g. "to write a summary of any book you add"
-ONLINE: the name of the free public data service, or none"""
+ONLINE: the name of the free public data service, or none{plan}"""
 AI_CHECK_LISTING = """
 
 The app is modelled on a Play Store app. Weigh its features too, especially the ones it calls AI, smart or automatic, and the content it serves. Its store listing:
 
 {listing}
 
-Now answer with exactly the four lines described above."""
+Now answer with exactly the lines described above."""
+
+# Feature understanding, asked in the same call as AI_CHECK when an app is created; the user may review the list.
+PLAN_ASK = """
+{name}FEATURE: one feature the app will have, in a few plain words a non-technical user understands; one FEATURE line per feature, 5 to 8 of them, the most important first, covering what the user asked for
+EXTRA: one feature it could also have but will not get unless the user picks it; 3 to 5 EXTRA lines"""
+PLAN_NAME = """NAME: a plain name of one to three words that says what the app does, like "Book Ideas", "Calorie Counter" or "Video Editor"; not a made-up brand and not the name of an existing app
+"""
+
+
+def plan_ask(name_given: bool) -> str:
+    return PLAN_ASK.format(name="" if name_given else PLAN_NAME)
+
+
+def parse_plan(answer: str) -> dict | None:
+    """{name, features, extras} from the PLAN_ASK lines; None when the answer lists no features."""
+    def lines(key: str) -> list[str]:
+        found = re.findall(rf"^\W*{key}\W*:\s*(.+)", answer, re.I | re.M)
+        return [s.strip().strip("*`\"")[:120] for s in found if s.strip()][:10]
+    features = lines("FEATURE")
+    if not features:
+        return None
+    name = lines("NAME")
+    return {"name": name[0][:40] if name else "", "features": features, "extras": lines("EXTRA")}
+
+
+def features_block(features: list[str]) -> str:
+    if not features:
+        return ""
+    return ("\nThe user confirmed that the app has these features; build all of them and keep the app focused on them:\n"
+            + "".join(f"- {f}\n" for f in features))
 AI_CHECK_CREATE = "this phone app"
 AI_CHECK_REVISE = "this change to their existing phone app"
 
