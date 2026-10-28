@@ -155,26 +155,40 @@ def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: 
     """Create with the chosen agent, then build/fix until the artifact exists. Writes status.json as it goes.
 
     inspiration = {"app_id": <Play Store package>, "apk": bool, "reviews": bool}: the listing (and APK) is saved to
-    inspiration/ first and the create prompt tells the agent to build its own version of that app."""
-    naming = codex.NAME_GIVEN.format(name=name) if name else codex.NAME_PICK
-
-    def prompt(info: dict | None) -> str:
-        return codex.CREATE.format(request=request, naming=naming, inspiration=codex.inspiration_block(info))
+    inspiration/ first and the create prompt tells the agent to build its own version of that app.
+    The check also lists the app's features (the plan); the user may stop to review them before the code is written."""
+    def prompt(info: dict | None, plan: dict | None) -> str:
+        given = (plan or {}).get("name") or name
+        return codex.CREATE.format(request=request, inspiration=codex.inspiration_block(info),
+                                   features=codex.features_block((plan or {}).get("features", [])),
+                                   naming=codex.NAME_GIVEN.format(name=given) if given else codex.NAME_PICK)
 
     _job(app_id, emit, agent, prompt, "create", after=lambda message: _apply_name(app_id, message),
-         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_CREATE, request=request), inspiration=inspiration)
+         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_CREATE, request=request, plan=codex.plan_ask(bool(name))),
+         inspiration=inspiration)
 
 
 def revise(app_id: str, request: str, emit: Emit) -> None:
     """Change an existing app with the agent that wrote it, bump the patch version, rebuild."""
     agent = workspace.read_vibe(app_id).get("agent", "codex")
-    _job(app_id, emit, agent, lambda _: codex.REVISE.format(request=request), f"revise: {request[:60]}",
-         after=lambda _: _bump_version(app_id), ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request))
+    _job(app_id, emit, agent, lambda _, __: codex.REVISE.format(request=request), f"revise: {request[:60]}",
+         after=lambda _: _bump_version(app_id),
+         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request, plan=""))
 
 
-def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Emit) -> tuple[str | None, str]:
-    """(AI key the app gets or None, free online data service or ""). Asks the user (status "waiting") only when
-    the app needs AI.
+def _review(app_id: str, plan: dict, status: Callable) -> dict:
+    """Wait in "reviewing" until the user confirms the features (POST /apps/{id}/plan)."""
+    status("reviewing", plan=plan)
+    while app_id not in workspace.PLANS:
+        workspace.check_cancelled(app_id)
+        time.sleep(0.5)
+    workspace.HOLDS.discard(app_id)
+    return workspace.PLANS.pop(app_id)
+
+
+def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Emit) -> tuple[str | None, str, str]:
+    """(AI key the app gets or None, free online data service or "", the agent's whole answer). Asks the user
+    (status "waiting") only when the app needs AI.
 
     The agent judges the request first (AI_CHECK). vibe.json "ai" holds the AI answer: a provider id, or false; an
     app that already uses AI keeps its key. vibe.json "online" names the data service; a revision keeps the old one."""
@@ -186,19 +200,20 @@ def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Em
     listing = app / "inspiration" / "listing.md"  # an inspired app's request is one line; its features are here
     if listing.exists():
         ai_check += codex.AI_CHECK_LISTING.format(listing=listing.read_text("utf-8")[:6000])
-    need, wanted, why, online = codex.parse_ai_check(run(app, ai_check, emit))
+    answer = run(app, ai_check, emit)
+    need, wanted, why, online = codex.parse_ai_check(answer)
     online = online or vibe.get("online", "")
     if online:
         emit("build", f"online data: {online}")
         workspace.update_vibe(app_id, online=online)
     if current and settings.pick(current) == current:
         workspace.update_vibe(app_id, ai=current)
-        return current, online
+        return current, online, answer
     if current:
         need, wanted, why = True, current, "to keep its AI features working (its key is no longer saved)"
     elif not need:
         workspace.update_vibe(app_id, ai=False)
-        return None, online
+        return None, online, answer
     status("waiting", question={"why": why, "provider": wanted})
     while app_id not in workspace.ANSWERS:
         workspace.check_cancelled(app_id)
@@ -206,10 +221,10 @@ def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Em
     provider = settings.pick(wanted) if workspace.ANSWERS.pop(app_id) else None
     emit("build", f"AI: {provider or 'not used'}")
     workspace.update_vibe(app_id, ai=provider or False)
-    return provider, online
+    return provider, online, answer
 
 
-def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], str], commit: str,
+def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dict | None], str], commit: str,
          after: Callable[[str], None], ai_check: str, inspiration: dict | None = None) -> None:
     app = workspace.app_dir(app_id)
     agent_run = runner(agent).run
@@ -240,11 +255,35 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None], st
             status("inspiring")
             info = playstore.save_inspiration(app, inspiration["app_id"], inspiration["apk"], inspiration["reviews"], emit)
             workspace.update_vibe(app_id, inspiration=info)
-        provider, online = _check(app_id, ai_check, run, status, emit)
+        provider, online, answer = _check(app_id, ai_check, run, status, emit)
         key_names = settings.write_env(app, provider)  # the one key the user agreed to, as EXPO_PUBLIC_* in .env
-        status("coding")
-        message = run(app, prompt(info) + settings.keys_block(key_names) + codex.online_block(online), emit,
-                      mcp=bool(info and info["apk"]))
+        plan = codex.parse_plan(answer) if commit == "create" else None
+        if plan:
+            given = workspace.read_vibe(app_id)["name"]
+            plan["name"] = given if given != "New app" else plan["name"]
+            if plan["name"]:  # shown on the card while the user reviews
+                _set_name(app_id, plan["name"])
+            emit("build", "features: " + "; ".join(plan["features"]))
+        while True:
+            if plan and app_id in workspace.HOLDS:
+                plan = _review(app_id, plan, status)
+            if plan:
+                if plan["name"]:  # again: the review may change it, and a rollback resets app.json
+                    _set_name(app_id, plan["name"])
+                workspace.update_vibe(app_id, features=plan["features"], ideas=plan["extras"])
+            status("coding", **({"plan": plan} if plan else {}))
+            try:
+                message = run(app, prompt(info, plan) + settings.keys_block(key_names) + codex.online_block(online),
+                              emit, mcp=bool(info and info["apk"]))
+                break
+            except Exception:
+                if not plan or app_id not in workspace.HOLDS or app_id in workspace.CANCELLED:
+                    raise
+                emit("build", "stopped writing the code so you can review the features")
+                vibe = workspace.read_vibe(app_id)  # uncommitted job state (ai, online, inspiration, model)
+                workspace.rollback(app, before)
+                workspace.update_vibe(app_id, **vibe)
+        workspace.HOLDS.discard(app_id)
         if commit == "create":
             changes = subprocess.run(["git", "status", "--porcelain", "--", "app", "src", "modules"],
                                      cwd=app, capture_output=True, text=True, check=True)
@@ -300,14 +339,13 @@ def _bump_version(app_id: str) -> None:
 
 def _apply_name(app_id: str, message: str) -> None:
     m = re.match(r"\s*NAME:\s*(.+)", message)
-    if not m:
-        return
-    name = m.group(1).strip().strip("*`\"")[:40]
-    app = workspace.app_dir(app_id)
-    vibe = workspace.read_vibe(app_id)
-    vibe["name"] = name
-    (app / "vibe.json").write_text(json.dumps(vibe, indent=2) + "\n", "utf-8")
-    app_json = app / "app.json"
+    if m:
+        _set_name(app_id, m.group(1).strip().strip("*`\"")[:40])
+
+
+def _set_name(app_id: str, name: str) -> None:
+    workspace.update_vibe(app_id, name=name)
+    app_json = workspace.app_dir(app_id) / "app.json"
     data = json.loads(app_json.read_text("utf-8"))
     data["expo"]["name"] = name
     app_json.write_text(json.dumps(data, indent=2) + "\n", "utf-8")

@@ -83,6 +83,8 @@ class Cancelled(Exception):
 JOBS: set[str] = set()  # app ids with a create/revise job running in this backend process
 CANCELLED: set[str] = set()  # app ids whose job the user asked to stop
 ANSWERS: dict[str, bool] = {}  # app id -> the user's "use AI?" answer, for a job paused in "waiting"
+HOLDS: set[str] = set()  # app ids whose user asked to review the features before the code is written
+PLANS: dict[str, dict] = {}  # app id -> the features the user confirmed, for a job paused in "reviewing"
 _PROCS: dict[str, subprocess.Popen] = {}  # app id -> the agent or build command running for it
 
 
@@ -111,10 +113,19 @@ def cancel(app_id: str) -> bool:
     return True
 
 
+def hold(app_id: str, stop_agent: bool) -> None:
+    """Pause the job for a feature review once the features are known; stop_agent ends a coding run already going."""
+    HOLDS.add(app_id)
+    if stop_agent and app_id in _PROCS:
+        _kill(_PROCS[app_id])
+
+
 def end_job(app_id: str) -> None:
     JOBS.discard(app_id)
     CANCELLED.discard(app_id)
     ANSWERS.pop(app_id, None)
+    HOLDS.discard(app_id)
+    PLANS.pop(app_id, None)
     _PROCS.pop(app_id, None)
 
 
@@ -135,7 +146,7 @@ def rollback(cwd: Path, rev: str) -> None:
     """Put the app's files back to commit rev; the event log and status stay as they are."""
     git(cwd, "reset", "-q", rev)
     git(cwd, "checkout", rev, "--", ".", ":(exclude)events.jsonl", ":(exclude)status.json")
-    git(cwd, "clean", "-fdq")
+    git(cwd, "clean", "-fdq", "-e", "events.jsonl")
 
 
 def write_status(app_id: str, status: str, **extra) -> dict:

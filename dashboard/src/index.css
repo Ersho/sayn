@@ -212,6 +212,23 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .ai-ask { border: 1px solid #f0d9a6; background: #fffaf0; border-radius: 12px; padding: 14px 16px; margin-top: 14px; display: flex; flex-direction: column; gap: 6px; line-height: 1.45; }
 .ai-ask b { display: flex; align-items: center; gap: 6px; color: var(--busy-text); }
 .ai-ask .row-end { margin-top: 8px; }
+.features { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.pause-card { display: flex; align-items: center; gap: 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; color: var(--green-ink); }
+.pause-card.on { background: var(--green-light); border-color: transparent; }
+.pause-card > .ic { width: 22px; height: 22px; flex: none; }
+.pause-card b { display: block; font-size: 14px; }
+.pause-card p { margin: 2px 0 0; font-size: 13px; line-height: 1.4; color: var(--muted); }
+.pause-card button { flex: none; padding: 7px 14px; }
+.features details summary { cursor: pointer; font-weight: 600; color: var(--green-ink); }
+.features details ul, .feature-list { margin: 6px 0 0; padding-left: 20px; line-height: 1.6; }
+.features.review { align-items: stretch; }
+.features.review .field-label { margin: 6px 0 0; }
+.features.review .name-input { width: 100%; max-width: 320px; }
+.checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.checks label { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.checks input { margin-top: 3px; accent-color: var(--green); }
+.add-row { display: flex; gap: 8px; margin-top: 4px; }
+.add-row input { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
 .name-input { padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-weight: 700; width: 220px; }
 .rename { padding: 2px 6px; margin-left: 4px; vertical-align: middle; }
 .rename .ic { width: 14px; height: 14px; }
