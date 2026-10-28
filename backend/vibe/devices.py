@@ -1,7 +1,9 @@
 """Android devices via adbutils, falling back to the adb binary where needed."""
 import json
 import os
+import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -14,9 +16,16 @@ ADB = str(Path(os.environ["ANDROID_HOME"]) / "platform-tools" / ("adb.exe" if os
 KNOWN = workspace.ROOT / "phones.json"  # {serial: {model, first_seen, last_seen}}: every device ever plugged in; optional "name" is the user's label
 client = adbutils.AdbClient()
 lock = threading.Lock()  # /devices and /apps poll concurrently; unsynced read-modify-write lost renames
+# USB vendor ids of phone makers. A phone the OS sees but adb does not has USB debugging off;
+# the brand picks the right "turn on developer access" steps in the dashboard.
+VENDORS = {0x18D1: "google", 0x04E8: "samsung", 0x2717: "xiaomi", 0x2A70: "oneplus", 0x22D9: "oppo", 0x2D95: "vivo",
+           0x22B8: "motorola", 0x12D1: "huawei", 0x339B: "honor", 0x0FCE: "sony", 0x1004: "lg", 0x2E04: "nokia",
+           0x19D2: "zte", 0x05AC: "apple"}
+GENERIC = re.compile(r"composite|adb|interface|usb device|input|^mtp|^android$|apple mobile device", re.I)
 
 
-def list_devices() -> list[dict]:
+def list_devices(usb: bool = False) -> list[dict]:
+    """adb and Xcode devices, merged with phones.json; usb=True adds phones only the OS sees (dashboard polling)."""
     out = []
     try:
         infos = client.list()
@@ -34,7 +43,99 @@ def list_devices() -> list[dict]:
             except Exception:
                 pass
         out.append({"serial": info.serial, "state": info.state, "model": model, "platform": "android", "kind": "device"})
-    return _remember(out + ios.list_devices())
+    merged = _remember(out + ios.list_devices())
+    if not usb:
+        return merged
+    seen = {d["serial"] for d in merged if d["state"] != "offline"}
+    for p in usb_phones():
+        if p["serial"] in seen or (p["brand"] == "apple" and ios.available()):
+            continue  # adb or Xcode already reports it
+        known = next((d for d in merged if d["serial"] == p["serial"]), None)
+        if known:  # e.g. a phone set up before whose debugging got switched off by an update
+            known.update(state=p["state"], brand=p["brand"])
+        else:
+            merged.insert(0, {**p, "platform": "ios" if p["brand"] == "apple" else "android", "kind": "device",
+                              "name": "", "first_seen": time.time(), "last_seen": time.time()})
+    return merged
+
+
+def usb_phones() -> list[dict]:
+    """Phones plugged in over USB as the OS sees them: [{serial, brand, model, state}].
+
+    state is "usb" (USB debugging off) or "driver" (Windows sees the phone's debugging interface but has no driver
+    for it, common on Samsung). serial is the USB serial number, which Android also uses as its adb serial.
+    """
+    try:
+        if os.name == "nt":
+            found = _usb_windows()
+        elif sys.platform == "darwin":
+            found = _usb_mac()
+        else:
+            found = _usb_linux()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    out = []
+    for f in found:
+        brand = VENDORS.get(f["vid"])
+        if not brand or (brand == "apple" and not 0x1290 <= f["pid"] <= 0x12AF):  # Apple: iPhone/iPad ids only
+            continue
+        names = [n for n in f["names"] if n and not GENERIC.search(n)]
+        out.append({"serial": f["serial"] or f"usb-{f['vid']:04x}-{f['pid']:04x}", "brand": brand,
+                    "model": names[0] if names else "", "state": "driver" if f.get("adb") else "usb"})
+    return out
+
+
+def _usb_windows() -> list[dict]:
+    # pnputil answers in ~50 ms (PowerShell's Get-PnpDevice takes over a second). Field labels are localized,
+    # so read by position: "Instance ID" then "Device Description", and later a status containing "Problem".
+    r = subprocess.run(["pnputil", "/enum-devices", "/connected", "/bus", "USB"], capture_output=True, text=True,
+                       timeout=10, encoding="utf-8", errors="replace")
+    devs: dict[str, dict] = {}
+    for block in r.stdout.split("\n\n"):
+        values = [line.split(":", 1)[1].strip() for line in block.splitlines() if ":" in line]
+        m = re.match(r"USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})(&MI_\d+)?\\(.+)", values[0] if values else "", re.I)
+        if not m:
+            continue
+        vid, pid, child, tail = int(m[1], 16), int(m[2], 16), m[3], m[4]
+        d = devs.setdefault(f"{vid}:{pid}", {"vid": vid, "pid": pid, "serial": "", "names": [], "adb": False})
+        desc = values[1] if len(values) > 1 else ""
+        d["names"].append(desc)
+        if not child and "&" not in tail:  # Windows makes up ids with "&" when the device has no serial number
+            d["serial"] = tail
+        if child and ("adb" in desc.lower() or "problem" in block.lower()):
+            d["adb"] = True
+    return list(devs.values())
+
+
+def _usb_mac() -> list[dict]:
+    r = subprocess.run(["ioreg", "-p", "IOUSB", "-l", "-w0"], capture_output=True, text=True, timeout=10)
+    devs, cur = [], None
+    for line in r.stdout.splitlines():
+        if "+-o " in line:
+            cur = {"vid": 0, "pid": 0, "serial": "", "names": []}
+            devs.append(cur)
+        elif cur is not None and (m := re.search(r'"(idVendor|idProduct|USB Serial Number|USB Product Name)" = "?([^"]*)"?', line)):
+            key, val = m[1], m[2].strip()
+            if key == "idVendor":
+                cur["vid"] = int(val)
+            elif key == "idProduct":
+                cur["pid"] = int(val)
+            elif key == "USB Serial Number":
+                cur["serial"] = val
+            else:
+                cur["names"].append(val)
+    return devs
+
+
+def _usb_linux() -> list[dict]:
+    devs = []
+    for p in Path("/sys/bus/usb/devices").glob("*"):
+        if not (p / "idVendor").exists():
+            continue
+        read = lambda name: (p / name).read_text().strip() if (p / name).exists() else ""
+        devs.append({"vid": int(read("idVendor"), 16), "pid": int(read("idProduct"), 16), "serial": read("serial"),
+                     "names": [read("product")]})
+    return devs
 
 
 def _remember(online: list[dict]) -> list[dict]:

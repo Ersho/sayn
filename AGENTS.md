@@ -28,7 +28,7 @@ backend/vibe/
 backend/playstore/     tiny Node CLI around google-play-scraper (playstore.mjs); playstore.py shells out to it
   build.py             tsc → expo prebuild → Gradle or Xcode, agent fix loop, revise, permissions
   ios.py               Xcode CLI device discovery, Apple team selection, setup checkpoints, devicectl / simctl install and launch
-  devices.py           adbutils wrapper: list (+ phones.json history), install, launch, screenshot
+  devices.py           adbutils wrapper: list (+ phones.json history, + phones only the OS sees over USB = debugging off), install, launch, screenshot
 dashboard/             Vite + React + TypeScript single-page UI (src/App.tsx, src/index.css)
                        sidebar: My apps, Devices, Get inspired, New app, Settings
 ```
