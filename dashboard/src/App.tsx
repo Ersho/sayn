@@ -5,7 +5,9 @@ const API = "http://localhost:8000";
 type Platform = "android" | "ios";
 type BuildTarget = { platform: Platform; ios_target: "device" | "simulator"; ios_device: string };
 const ANDROID_TARGET: BuildTarget = { platform: "android", ios_target: "device", ios_device: "" };
-type Device = { platform: Platform; kind: "device" | "simulator"; serial: string; model: string; name: string; state: string; first_seen: number; last_seen: number };
+// state: "device" ready, "unauthorized" waiting for Allow, "usb" plugged in with USB debugging off,
+// "driver" Windows lacks the phone's USB driver, "offline" not plugged in (remembered from before)
+type Device = { platform: Platform; kind: "device" | "simulator"; serial: string; model: string; name: string; state: string; brand?: string; first_seen: number; last_seen: number };
 type App = {
   id: string; name: string; request: string; platform: Platform; ios_target?: "device" | "simulator"; artifact: boolean; agent?: string; model?: string; status: string; package: string;
   installed_on: string[]; apk: boolean; apk_mb: number | null; error?: string; summary?: string;
@@ -97,6 +99,7 @@ const I = {
   gear: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>,
   pause: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M8.25 7v6M11.75 7v6" /></svg>,
   star: <svg viewBox="0 0 20 20"><path d="M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z" fill="currentColor" /></svg>,
+  hand: <svg viewBox="0 0 20 20"><path d="M7 10V4.5a1.25 1.25 0 0 1 2.5 0V9M9.5 8.5v-5a1.25 1.25 0 0 1 2.5 0v5M12 9V5a1.25 1.25 0 0 1 2.5 0v6.5c0 3.3-2.2 5.5-5 5.5-2 0-3.2-1-4.3-2.6L3.6 11.8a1.2 1.2 0 0 1 1.9-1.5L7 12" /></svg>,
 };
 const Icon = ({ i, className }: { i: ReactNode; className?: string }) => <span className={`ic ${className ?? ""}`}>{i}</span>;
 
@@ -315,7 +318,7 @@ function CancelButton({ app, reload }: { app: App; reload: () => void }) {
   );
 }
 
-function DeployButton({ app, devices, onDone }: { app: App; devices: Device[]; onDone: () => void }) {
+function DeployButton({ app, devices, onDone, go }: { app: App; devices: Device[]; onDone: () => void; go?: (v: View) => void }) {
   const online = devices.filter((d) => d.state === "device" && d.platform === app.platform
     && (app.platform !== "ios" || d.kind === (app.ios_target || "device")));
   const [serial, setSerial] = useState("");
@@ -324,6 +327,9 @@ function DeployButton({ app, devices, onDone }: { app: App; devices: Device[]; o
   const disabled = !app.artifact || BUSY.has(app.status) || online.length === 0 || busy;
   const title = BUSY.has(app.status) ? "Still building" : !app.artifact ? "Not built yet" : online.length === 0 ? "Plug in a device to install" : "";
   const installed = app.installed_on.includes(chosen);
+  if (go && app.artifact && !BUSY.has(app.status) && online.length === 0 && app.platform === "android") {
+    return <button className="outline" onClick={() => go("devices")}><Icon i={I.phone} />Connect a phone to install</button>;
+  }
   return (
     <span className="deploy">
       {online.length > 1 && (
@@ -406,7 +412,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
           {busy
             ? <CancelButton app={app} reload={reload} />
             : <button className="outline" onClick={() => onRevise(app)}><Icon i={I.pencil} />Revise app</button>}
-          <DeployButton app={app} devices={devices} onDone={() => { setShotKey(Date.now()); reload(); }} />
+          <DeployButton app={app} devices={devices} go={go} onDone={() => { setShotKey(Date.now()); reload(); }} />
         </div>
       </div>
       {details && (
@@ -762,19 +768,157 @@ function DeviceName({ d }: { d: Device }) {
   );
 }
 
-function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
+/* ---------- connecting a phone ---------- */
+// Where "Build number" hides and where Developer options appear afterwards, per maker (Settings search finds both too).
+const BRANDS: Record<string, { label: string; build: string; dev: string; extra?: string }> = {
+  google: { label: "Pixel", build: "Settings → About phone → Build number", dev: "Settings → System → Developer options" },
+  samsung: { label: "Samsung", build: "Settings → About phone → Software information → Build number", dev: "Settings → Developer options (at the very bottom)" },
+  xiaomi: { label: "Xiaomi / Redmi / POCO", build: "Settings → About phone → OS version (or MIUI version)", dev: "Settings → Additional settings → Developer options",
+    extra: "Also turn on “Install via USB” in the same list. Xiaomi asks for this once." },
+  oneplus: { label: "OnePlus / OPPO / realme", build: "Settings → About device → Version → Build number", dev: "Settings → System settings → Developer options" },
+  vivo: { label: "vivo", build: "Settings → About phone → Software version", dev: "Settings → System management → Developer options" },
+  motorola: { label: "Motorola", build: "Settings → About phone → Build number", dev: "Settings → System → Developer options" },
+  huawei: { label: "Huawei / Honor", build: "Settings → About phone → Build number", dev: "Settings → System & updates → Developer options" },
+  other: { label: "Other", build: "Settings → About phone → Build number (sometimes under Software information)", dev: "Settings → System → Developer options" },
+};
+const BRAND_OF: Record<string, string> = { oppo: "oneplus", honor: "huawei" };
+const NEEDS_SETUP = ["usb", "driver", "unauthorized"];
+
+/** The phone the guide follows: a ready one wins, then the one closest to ready. */
+function guidePhone(devices: Device[]) {
+  const phones = devices.filter((d) => d.kind === "device");
+  return ["device", "unauthorized", "driver", "usb"].map((s) => phones.find((d) => d.state === s)).find(Boolean);
+}
+
+function ConnectGuide({ devices, go }: { devices: Device[]; go: (v: View) => void }) {
+  const phone = guidePhone(devices);
+  const detected = phone?.brand ? BRAND_OF[phone.brand] ?? phone.brand : "";
+  const [picked, setPicked] = useState("");
+  const brand = picked || (detected in BRANDS ? detected : "") || "google";
+  const b = BRANDS[brand];
+  const [since, setSince] = useState(Date.now());
+  const step = !phone ? 0 : phone.state === "usb" || phone.state === "driver" ? 1 : phone.state === "unauthorized" ? 2 : 3;
+  useEffect(() => setSince(Date.now()), [step]);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const stuck = now - since > 20000;  // after 20 s on one step, offer troubleshooting
+  const name = phone ? phone.name || phone.model || (detected && BRANDS[detected] ? `${BRANDS[detected].label} phone` : "phone") : "";
+
+  if (phone?.platform === "ios" && phone.state !== "device") {
+    return (
+      <section className="panel connect">
+        <h2>We found an iPhone or iPad.</h2>
+        <p className="sub">iPhone apps can only be built and installed from a Mac with Xcode. On this computer, sayn builds Android apps. Plug in an Android phone to continue.</p>
+      </section>
+    );
+  }
+  const live = <span className="live"><span className="dot" />{step === 0 ? "Looking for your phone" : "Watching for the next step"}</span>;
+  const steps: { title: string; done: string; body: ReactNode }[] = [
+    {
+      title: "Plug your phone into this computer", done: `Found your ${name}`,
+      body: <>
+        <p>Use a USB cable and unlock your phone. We’ll notice it right away.</p>
+        {stuck && <div className="hint"><b>Nothing happening?</b><ul>
+          <li>Try another cable. Some cables only charge and can’t carry data.</li>
+          <li>On the phone, pull down the notifications, tap “Charging this device via USB” and choose <b>File transfer</b>.</li>
+          <li>Try a different USB port on this computer.</li>
+        </ul></div>}
+      </>,
+    },
+    {
+      title: "Turn on developer access", done: "Developer access is on",
+      body: phone?.state === "driver" ? <>
+        <p>Your phone is ready, but this computer is missing its USB driver.</p>
+        <ol className="substeps">
+          <li>Install the driver: {brand === "samsung"
+            ? <a href="https://developer.samsung.com/android-usb-driver" target="_blank" rel="noreferrer">Samsung USB driver</a>
+            : <a href="https://developer.android.com/studio/run/oem-usb" target="_blank" rel="noreferrer">USB driver for your phone</a>}</li>
+          <li>Unplug the phone and plug it back in.</li>
+        </ol>
+      </> : <>
+        <p>This is a one-time switch that lets sayn install your own apps. It’s hidden, so here’s exactly where to find it{detected ? ` on your ${BRANDS[detected]?.label ?? "phone"}` : ""}:</p>
+        {!detected && <div className="chips brands">
+          {Object.entries(BRANDS).map(([k, v]) => <button key={k} className={`chip ${brand === k ? "on" : ""}`} onClick={() => setPicked(k)}>{v.label}</button>)}
+        </div>}
+        <ol className="substeps">
+          <li>Open <b>{b.build}</b> and tap it <b>7 times</b>. The phone may ask for your PIN, then says “You are now a developer!”</li>
+          <li>Go to <b>{b.dev}</b>. <span className="muted">Can’t find it? Type “USB debugging” in the search bar at the top of Settings.</span></li>
+          <li>Turn on <b>USB debugging</b> and tap OK.</li>
+        </ol>
+        {b.extra && <p className="muted small">{b.extra}</p>}
+        {detected && <button className="link small-link" onClick={() => setPicked(picked ? "" : "other")}>{picked ? "Show steps for my phone" : "These steps don’t match my phone"}</button>}
+        {stuck && <div className="hint"><b>Already did it?</b> Unplug the phone and plug it back in.</div>}
+      </>,
+    },
+    {
+      title: "Tap “Allow” on your phone", done: "This computer is allowed",
+      body: <>
+        <p>Your phone now shows <b>“Allow USB debugging?”</b>. Tick <b>Always allow from this computer</b>, then tap <b>Allow</b>.</p>
+        {stuck && <div className="hint"><b>Don’t see it?</b> Unlock your phone and look again, or unplug it and plug it back in.</div>}
+      </>,
+    },
+  ];
+  return (
+    <section className="panel connect">
+      {step === 3 ? (
+        <div className="connected">
+          <span className="big-check"><Icon i={I.check} /></span>
+          <h2>Your {name} is ready.</h2>
+          <p className="sub">Apps you make install on it with one click. You can unplug it any time; your apps keep working.</p>
+          <button className="primary big" onClick={() => go("new")}>Make an app <Icon i={I.arrow} /></button>
+        </div>
+      ) : <>
+        <div className="connect-head"><h2>Connect your phone</h2>{live}</div>
+        <p className="sub">Three short steps, done once. This page updates by itself as you go.</p>
+        <ol className="stepper">
+          {steps.map((s, i) => (
+            <li key={i} className={i < step ? "done" : i === step ? "active" : ""}>
+              <span className="step-dot">{i < step ? <Icon i={I.check} /> : <Icon i={[I.phone, I.gear, I.hand][i]} />}</span>
+              <div className="grow">
+                <b>{i < step ? s.done : s.title}</b>
+                {i === step && <div className="step-body">{s.body}</div>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </>}
+    </section>
+  );
+}
+
+/** Shown where a phone matters but none is ready; building works without one. */
+function PhoneNotice({ devices, go }: { devices: Device[]; go: (v: View) => void }) {
+  if (devices.some((d) => d.platform === "android" && d.state === "device")) return null;
+  const phone = guidePhone(devices);
+  return (
+    <div className="phone-notice">
+      <Icon i={I.phone} />
+      <p className="grow">{phone && NEEDS_SETUP.includes(phone.state)
+        ? <><b>Your phone is plugged in but not set up yet.</b> Finish it while your app builds.</>
+        : <><b>No phone connected.</b> That’s fine: you can start now and connect your phone while the app builds.</>}</p>
+      <button className="link" onClick={() => go("devices")}>Connect my phone <Icon i={I.arrow} /></button>
+    </div>
+  );
+}
+
+const DEVICE_LABEL: Record<string, string> = {
+  device: "Connected", unauthorized: "Waiting for you to tap “Allow” on the phone",
+  usb: "Plugged in, developer access is off", driver: "Plugged in, needs a USB driver",
+};
+
+function PhonesPage({ devices, apps, go }: { devices: Device[]; apps: App[]; go: (v: View) => void }) {
   const online = devices.filter((d) => d.state === "device");
   const waiting = devices.filter((d) => d.state !== "device" && d.state !== "offline");
   const past = devices.filter((d) => d.state === "offline");
   const row = (d: Device) => {
     const mine = apps.filter((a) => a.installed_on.includes(d.serial));
-    const label = d.state === "device" ? "Connected" : d.state === "offline" ? `Last seen ${ago(d.last_seen)}` : d.state === "unauthorized" ? "Waiting for you to tap “Allow” on the phone" : d.state;
+    const label = d.state === "offline" ? `Last seen ${ago(d.last_seen)}` : DEVICE_LABEL[d.state] ?? d.state;
     return (
       <li key={d.serial} className={`phone-row ${d.state}`}>
         <span className="phone-icon"><Icon i={I.phone} /></span>
         <div className="grow">
-          <DeviceName d={d} />
-          <div className="meta">{d.platform === "ios" ? "iOS" : "Android"} · {label} · serial {d.serial}</div>
+          {d.state === "usb" || d.state === "driver" ? <b>{d.model || "Phone"}</b> : <DeviceName d={d} />}
+          <div className="meta">{d.platform === "ios" ? "iOS" : "Android"} · {label}{d.serial.startsWith("usb-") ? "" : ` · serial ${d.serial}`}</div>
           {d.state === "device" && (
             <div className="meta">{mine.length ? `Apps from here: ${mine.map((a) => a.name).join(", ")}` : "No sayn apps installed yet"}</div>
           )}
@@ -795,15 +939,9 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
         </div>
       </header>
       <div className="two-col">
-        <section className="panel">
-          {online.length === 0 && waiting.length === 0 ? (
-            <div className="empty-phone">
-              <div className="phone-art"><Icon i={I.phone} /><span className="plus-bubble"><Icon i={I.plus} /></span></div>
-              <h2>A new home for your ideas.</h2>
-              <p className="sub">No devices connected yet. Plug in a phone or tablet to get started.</p>
-              <p className="muted small">A USB cable is all you need to start.</p>
-            </div>
-          ) : (
+        <ConnectGuide devices={devices} go={go} />
+        <aside className="panel">
+          {online.length + waiting.length > 0 && (
             <>
               <h2 className="panel-title">Connected now</h2>
               <ul className="phone-list">{[...online, ...waiting].map(row)}</ul>
@@ -815,14 +953,13 @@ function PhonesPage({ devices, apps }: { devices: Device[]; apps: App[] }) {
               <ul className="phone-list">{past.map(row)}</ul>
             </>
           )}
-        </section>
-        <aside className="panel">
-          <p className="eyebrow">Connect in a few minutes</p>
-          <ol className="guide">
-            <li><span className="num">1</span><div><b>Plug your phone or tablet into your laptop</b><p>Use a USB cable that supports data transfer.</p></div></li>
-            <li><span className="num">2</span><div><b>Enable development access</b><p>Android: turn on USB debugging in Developer options. iPhone/iPad: enable Developer Mode in Privacy &amp; Security. <a href="https://developer.android.com/studio/debug/dev-options" target="_blank" rel="noreferrer">Android guide <Icon i={I.arrow} /></a></p></div></li>
-            <li><span className="num">3</span><div><b>Allow this computer</b><p>Accept Allow USB debugging on Android, or Trust This Computer on iPhone/iPad, then choose an app to install.</p></div></li>
-          </ol>
+          {devices.length === 0 && (
+            <div className="empty-phone">
+              <div className="phone-art"><Icon i={I.phone} /><span className="plus-bubble"><Icon i={I.plus} /></span></div>
+              <p className="muted">Your phones will show up here.</p>
+            </div>
+          )}
+          <p className="muted small ios-note">Using an iPhone or iPad? That needs a Mac with Xcode; see Settings → iPhone and iPad.</p>
         </aside>
       </div>
       <p className="foot-note bar"><Icon i={I.shield} />Your apps stay yours. Installed apps run independently of your laptop.</p>
@@ -872,6 +1009,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
         </div>
         <hr />
         <TargetPicker target={target} setTarget={setTarget} devices={devices} />
+        {target.platform === "android" && <PhoneNotice devices={devices} go={go} />}
         <AgentPicker agent={agent} setAgent={setAgent} />
         <p className="muted small">Uses your local assistant and its usage allowance. Takes 5 to 10 minutes.</p>
         <button className="primary big wide" onClick={submit} disabled={!request.trim() || submitting || running}>
@@ -1039,9 +1177,15 @@ export default function Root() {
   const devices = useDevices();
   const { apps, reload } = useApps();
   const online = devices.filter((d) => d.state === "device").length;
-  const nav: { v: View; label: string; icon: ReactNode }[] = [
+  const setup = devices.some((d) => NEEDS_SETUP.includes(d.state));
+  useEffect(() => {
+    // First run: no phone was ever connected, so start by connecting one.
+    api<Device[]>("/devices").then((d) => { if (d.length === 0) setView("devices"); }).catch(() => {});
+  }, []);
+  const nav: { v: View; label: ReactNode; icon: ReactNode }[] = [
     { v: "apps", label: `My apps (${apps.length})`, icon: I.grid },
-    { v: "devices", label: `Devices (${online})`, icon: I.phone },
+    { v: "devices", label: <>Devices ({online}){online > 0 ? <span className="nav-dot ok" title="Phone connected" />
+      : setup ? <span className="nav-dot warn" title="A phone needs setting up" /> : null}</>, icon: I.phone },
     { v: "inspire", label: "Get inspired", icon: I.bulb },
     { v: "new", label: "New app", icon: I.newfile },
     { v: "settings", label: "Settings", icon: I.gear },
@@ -1058,7 +1202,7 @@ export default function Root() {
       </nav>
       <main>
         {view === "apps" && <AppsPage apps={apps} devices={devices} reload={reload} go={setView} job={job} onRevise={setRevising} />}
-        {view === "devices" && <PhonesPage devices={devices} apps={apps} />}
+        {view === "devices" && <PhonesPage devices={devices} apps={apps} go={setView} />}
         {view === "inspire" && <InspirePage onPick={setInspiring} />}
         {view === "settings" && <SettingsPage />}
         {view === "new" && <NewAppPage apps={apps} devices={devices} reload={reload} job={job} setJob={setJob} go={setView} onRevise={setRevising} />}

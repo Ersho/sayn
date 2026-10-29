@@ -151,7 +151,7 @@ def _saved(provider: str) -> None:
 
 @app.get("/devices")
 def get_devices():
-    return devices.list_devices()
+    return devices.list_devices(usb=True)
 
 
 @app.put("/devices/{serial}/name")

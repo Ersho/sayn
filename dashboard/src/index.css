@@ -126,6 +126,37 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .phone-row.offline { opacity: .75; }
 .phone-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--green-light); color: var(--green-ink); display: grid; place-items: center; }
 .phone-icon .ic { width: 22px; height: 22px; }
+.ios-note { margin-top: 18px; }
+.two-col > * { min-width: 0; }
+.nav-dot { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; }
+.nav-dot.ok { background: #2e9a5e; } .nav-dot.warn { background: #e0a020; animation: pulse 1.2s infinite; }
+.connect h2 { font-size: 26px; }
+.connect-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.live { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--busy-text); background: var(--busy); padding: 5px 12px; border-radius: 999px; }
+.stepper { list-style: none; margin: 26px 0 0; padding: 0; display: flex; flex-direction: column; }
+.stepper > li { display: flex; gap: 16px; position: relative; padding-bottom: 22px; color: var(--muted); }
+.stepper > li:not(:last-child)::before { content: ""; position: absolute; left: 21px; top: 46px; bottom: 4px; width: 2px; background: var(--line); }
+.stepper > li.done::before { background: var(--ok); }
+.stepper .step-dot { width: 44px; height: 44px; flex-shrink: 0; background: var(--panel); }
+.stepper .step-dot .ic { width: 20px; height: 20px; }
+.stepper > li > .grow > b { display: block; font-size: 17px; padding-top: 11px; }
+.stepper li.done { color: var(--text); } .stepper li.done .step-dot { background: var(--ok); color: var(--ok-text); border-color: transparent; }
+.stepper li.active { color: var(--text); }
+.stepper li.active .step-dot { border: 2px solid var(--green); color: var(--green-ink); box-shadow: 0 0 0 5px var(--green-light); }
+.step-body { margin-top: 10px; font-size: 15px; line-height: 1.55; display: flex; flex-direction: column; gap: 12px; }
+.substeps { margin: 0; padding-left: 0; list-style: none; counter-reset: s; display: flex; flex-direction: column; gap: 10px; }
+.substeps li { counter-increment: s; position: relative; background: var(--soft); border-radius: 10px; padding: 12px 14px 12px 50px; }
+.substeps li::before { content: counter(s); position: absolute; left: 14px; top: 12px; width: 24px; height: 24px; border-radius: 50%; background: var(--green); color: #fff; font-size: 13px; font-weight: 700; display: grid; place-items: center; }
+.chips.brands { gap: 8px; } .chips.brands .chip { padding: 7px 12px; font-size: 13px; }
+.small-link { font-size: 13px; align-self: flex-start; }
+.hint { border: 1px solid #f0d9a6; background: #fffaf0; border-radius: 10px; padding: 12px 14px; font-size: 14px; }
+.hint ul { margin: 6px 0 0; padding-left: 18px; }
+.connected { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 30px 10px; }
+.connected .primary { margin-top: 10px; }
+.big-check { width: 72px; height: 72px; border-radius: 50%; background: var(--ok); color: var(--ok-text); display: grid; place-items: center; margin-bottom: 6px; }
+.big-check .ic { width: 36px; height: 36px; } .big-check .ic svg { stroke-width: 2.2; }
+.phone-notice { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: var(--soft); border: 1px solid var(--line); font-size: 14px; line-height: 1.45; color: var(--green-ink); }
+.phone-notice > .ic { width: 22px; height: 22px; }
 .guide { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 26px; }
 .guide li { display: flex; gap: 16px; align-items: flex-start; }
 .guide .num { width: 44px; height: 44px; border-radius: 50%; background: var(--green-light); color: var(--green-ink); display: grid; place-items: center; font-weight: 700; flex-shrink: 0; }
