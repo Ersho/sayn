@@ -1,8 +1,10 @@
 """FastAPI app. Run: uv run uvicorn vibe.api:app --port 8000"""
 import asyncio
+import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -50,10 +52,12 @@ class NewApp(BaseModel):
     ios_target: str = "device"  # "device" or "simulator"
     ios_device: str = ""
     inspiration: Inspiration | None = None
+    images: list[str] = []  # reference pictures as data URLs ("make it look like this"), saved to references/
 
 
 class Revise(BaseModel):
     request: str
+    images: list[str] = []
 
 
 class Deploy(BaseModel):
@@ -205,11 +209,13 @@ def post_app(body: NewApp):
                                        and d["kind"] == body.ios_target and d["state"] == "device"
                                        for d in devices.list_devices()):
             raise HTTPException(400, "Connect the selected iPhone/iPad or start the selected Simulator first.")
+    images = _decode_images(body.images)
     name = body.name.strip()[:40]
     app_id = workspace.new_id(name)
     workspace.create_app(app_id, name or "New app", request, body.agent, body.platform,
                          body.ios_target if body.platform == "ios" else "device",
                          body.ios_device if body.platform == "ios" else "")
+    _save_references(app_id, images)
     emit(app_id, "status", "created")
     build.start(build.pipeline, app_id, request, lambda k, t: emit(app_id, k, t), body.agent, name, inspiration)
     return {"id": app_id}
@@ -268,10 +274,48 @@ def post_revise(app_id: str, body: Revise):
         raise HTTPException(400, "empty request")
     if workspace.read_status(app_id)["status"] in BUSY:
         raise HTTPException(409, "app is busy")
+    _save_references(app_id, _decode_images(body.images))  # pictures of an earlier request do not carry over
     workspace.write_status(app_id, "created")
     emit(app_id, "status", "created")
     build.start(build.revise, app_id, request, lambda k, t: emit(app_id, k, t))
     return {"id": app_id}
+
+
+MAX_IMAGES = 4
+MAX_IMAGE_MB = 8
+IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
+
+
+def _decode_images(images: list[str]) -> list[tuple[str, bytes]]:
+    """[(extension, bytes)] from "data:image/png;base64,..." strings; 400 on anything else."""
+    if len(images) > MAX_IMAGES:
+        raise HTTPException(400, f"Add at most {MAX_IMAGES} pictures.")
+    out = []
+    for img in images:
+        m = re.fullmatch(r"data:(image/[a-z]+);base64,(.+)", img, re.S)
+        if not m or m[1] not in IMAGE_TYPES:
+            raise HTTPException(400, "Pictures must be PNG, JPEG, WebP or GIF.")
+        data = base64.b64decode(m[2])
+        if len(data) > MAX_IMAGE_MB * 1_000_000:
+            raise HTTPException(400, f"Each picture can be at most {MAX_IMAGE_MB} MB.")
+        out.append((IMAGE_TYPES[m[1]], data))
+    return out
+
+
+def _save_references(app_id: str, images: list[tuple[str, bytes]]) -> None:
+    """Write references/ref-N.<ext> (git-excluded like inspiration/), replacing the pictures of an earlier request."""
+    app = workspace.app_dir(app_id)
+    folder = app / "references"
+    shutil.rmtree(folder, ignore_errors=True)
+    if not images:
+        return
+    folder.mkdir()
+    exclude = app / ".git" / "info" / "exclude"
+    if "references/" not in exclude.read_text("utf-8"):
+        exclude.open("a", encoding="utf-8").write("\nreferences/\n")
+    for i, (ext, data) in enumerate(images, 1):
+        (folder / f"ref-{i}.{ext}").write_bytes(data)
+    emit(app_id, "build", f"saved {len(images)} reference picture(s) to references/")
 
 
 @app.post("/apps/{app_id}/cancel")

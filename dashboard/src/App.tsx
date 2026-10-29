@@ -464,23 +464,74 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
   );
 }
 
+/* ---------- reference pictures ("make it look like this") ---------- */
+const MAX_PICTURES = 4;
+const MAX_PICTURE_MB = 8;
+
+/** Pictures the user adds by choosing, dropping or pasting files; sent to the backend as data URLs. */
+function usePictures() {
+  const [pictures, setPictures] = useState<string[]>([]);
+  const add = (files: FileList | File[]) => {
+    for (const f of Array.from(files)) {
+      if (!f.type.startsWith("image/")) continue;
+      if (f.size > MAX_PICTURE_MB * 1e6) { alert(`${f.name} is too big. Pictures can be up to ${MAX_PICTURE_MB} MB.`); continue; }
+      const reader = new FileReader();
+      reader.onload = () => setPictures((p) => p.length < MAX_PICTURES ? [...p, String(reader.result)] : p);
+      reader.readAsDataURL(f);
+    }
+  };
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith("image/"));
+    if (files.length) { e.preventDefault(); add(files); }
+  };
+  return { pictures, setPictures, add, onPaste };
+}
+
+function PicturePicker({ p }: { p: ReturnType<typeof usePictures> }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  return (
+    <div className={`pictures ${over ? "over" : ""}`}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+      onDrop={(e) => { e.preventDefault(); setOver(false); p.add(e.dataTransfer.files); }}>
+      <p className="field-label">Add a picture <span className="muted">(optional)</span></p>
+      <p className="muted small">Show a screenshot or design you like and your app will look similar. Drop or paste it here, up to {MAX_PICTURES}.</p>
+      <div className="picture-row">
+        {p.pictures.map((src, i) => (
+          <div key={i} className="picture">
+            <img src={src} alt={`Picture ${i + 1}`} />
+            <button title="Remove" onClick={() => p.setPictures(p.pictures.filter((_, j) => j !== i))}>×</button>
+          </div>
+        ))}
+        {p.pictures.length < MAX_PICTURES && (
+          <button className="picture add" onClick={() => input.current?.click()}><Icon i={I.plus} />Add</button>
+        )}
+      </div>
+      <input ref={input} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden
+        onChange={(e) => { if (e.target.files) p.add(e.target.files); e.target.value = ""; }} />
+    </div>
+  );
+}
+
 function ReviseDialog({ app, onClose, onStarted }: { app: App; onClose: () => void; onStarted: (id: string) => void }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const pics = usePictures();
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} onPaste={pics.onPaste}>
         <p className="eyebrow">Revise {app.name}</p>
         <h2>What should change?</h2>
         <p className="sub">Describe the change in plain language. Your assistant updates the app and builds a new version.</p>
         <textarea rows={4} value={text} onChange={(e) => setText(e.target.value)} autoFocus
           placeholder="e.g. add a dark mode and make the buttons bigger" />
+        <PicturePicker p={pics} />
         <div className="row-end">
           <button className="outline" onClick={onClose}>Cancel</button>
           <button className="primary" disabled={!text.trim() || busy} onClick={async () => {
             setBusy(true);
             try {
-              await api(`/apps/${app.id}/revise`, { method: "POST", body: JSON.stringify({ request: text }) });
+              await api(`/apps/${app.id}/revise`, { method: "POST", body: JSON.stringify({ request: text, images: pics.pictures }) });
               onStarted(app.id);
             } catch (e) { alert(String(e)); setBusy(false); }
           }}>{busy ? "Starting…" : "Update my app"}</button>
@@ -975,6 +1026,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
   const [target, setTarget] = useState<BuildTarget>(ANDROID_TARGET);
   const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
   const [submitting, setSubmitting] = useState(false);
+  const pics = usePictures();
   const { log, status } = useJob(job, reload);
   const app = apps.find((a) => a.id === job);
   const running = BUSY.has(status);
@@ -982,9 +1034,9 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
   const submit = async () => {
     setSubmitting(true);
     try {
-      const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request, name, agent, ...targetBody(target, devices) }) });
+      const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request, name, agent, ...targetBody(target, devices), images: pics.pictures }) });
       setJob(r.id);
-      setName(""); setRequest("");
+      setName(""); setRequest(""); pics.setPictures([]);
       reload();
     } catch (e) { alert(String(e)); }
     setSubmitting(false);
@@ -992,7 +1044,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
 
   return (
     <div className="two-col new">
-      <section className="panel form">
+      <section className="panel form" onPaste={pics.onPaste}>
         <p className="eyebrow">From an idea to your home screen</p>
         <h1>What would you like to make?</h1>
         <p className="sub">Start with something you wish your phone could do.</p>
@@ -1003,6 +1055,7 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
           <textarea rows={4} value={request} onChange={(e) => setRequest(e.target.value)}
             placeholder="A private offline journal with a daily prompt, mood tracker, and a calendar of past entries." />
         </label>
+        <PicturePicker p={pics} />
         <p className="field-label">Or try one of these ideas</p>
         <div className="chips">
           {IDEAS.map((i) => <button key={i.label} className="chip" onClick={() => { setRequest(i.text); if (!name) setName(i.label); }}>{i.label}</button>)}

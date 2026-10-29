@@ -160,6 +160,7 @@ def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: 
     def prompt(info: dict | None, plan: dict | None) -> str:
         given = (plan or {}).get("name") or name
         return codex.CREATE.format(request=request, inspiration=codex.inspiration_block(info),
+                                   references=codex.references_block(workspace.app_dir(app_id)),
                                    features=codex.features_block((plan or {}).get("features", [])),
                                    naming=codex.NAME_GIVEN.format(name=given) if given else codex.NAME_PICK)
 
@@ -171,7 +172,8 @@ def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: 
 def revise(app_id: str, request: str, emit: Emit) -> None:
     """Change an existing app with the agent that wrote it, bump the patch version, rebuild."""
     agent = workspace.read_vibe(app_id).get("agent", "codex")
-    _job(app_id, emit, agent, lambda _, __: codex.REVISE.format(request=request), f"revise: {request[:60]}",
+    _job(app_id, emit, agent, lambda _, __: codex.REVISE.format(
+             request=request, references=codex.references_block(workspace.app_dir(app_id))), f"revise: {request[:60]}",
          after=lambda _: _bump_version(app_id),
          ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request, plan=""))
 
@@ -229,7 +231,7 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
     app = workspace.app_dir(app_id)
     agent_run = runner(agent).run
 
-    def run(app, prompt, emit, mcp=False):
+    def run(app, prompt, emit, mcp=False, images=[]):
         def on_event(kind: str, text: str):
             if kind == "model":  # the model the agent CLI reports; shown in the dashboard
                 workspace.update_vibe(app_id, model=text)
@@ -239,7 +241,7 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
         vibe = workspace.read_vibe(app_id)
         target = vibe.get("platform", "android")
         prompt += f"\nTarget platform: {target}. Keep native APIs and permission declarations correct for this platform."
-        return agent_run(app, prompt, on_event, mcp=mcp)
+        return agent_run(app, prompt, on_event, mcp=mcp, images=images)
 
     def status(s: str, **extra):
         workspace.check_cancelled(app_id)
@@ -272,9 +274,11 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
                     _set_name(app_id, plan["name"])
                 workspace.update_vibe(app_id, features=plan["features"], ideas=plan["extras"])
             status("coding", **({"plan": plan} if plan else {}))
+            if codex.references(app):
+                emit("build", "prompt:" + codex.references_block(app).rstrip())
             try:
                 message = run(app, prompt(info, plan) + settings.keys_block(key_names) + codex.online_block(online),
-                              emit, mcp=bool(info and info["apk"]))
+                              emit, mcp=bool(info and info["apk"]), images=codex.references(app))
                 break
             except Exception:
                 if not plan or app_id not in workspace.HOLDS or app_id in workspace.CANCELLED:

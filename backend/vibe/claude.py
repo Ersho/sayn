@@ -30,9 +30,9 @@ def command(app: Path, mcp: bool = False) -> list[str]:
     ]
 
 
-def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False) -> str:
+def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False, images: list[Path] = []) -> str:
     """Run Claude Code; emit('codex', line) per event, emit('model', name) once; return the final message. Raise on failure.
-    mcp=True adds REA's MCP server (APK analysis)."""
+    mcp=True adds REA's MCP server (APK analysis). images are ignored: the prompt names them and Claude opens them with Read."""
     proc = workspace.popen(
         app, command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, env=playstore.agent_env() if mcp else None,

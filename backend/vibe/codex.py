@@ -18,7 +18,7 @@ EXTRA_WRITABLE = [Path.home() / ".expo"] + (
     else [Path.home() / ".npm"])
 
 
-def command(app: Path, mcp: bool = False) -> list[str]:
+def command(app: Path, mcp: bool = False, images: list[Path] = []) -> list[str]:
     add_dirs = []
     for d in EXTRA_WRITABLE:
         d.mkdir(parents=True, exist_ok=True)
@@ -39,6 +39,7 @@ def command(app: Path, mcp: bool = False) -> list[str]:
         "-c", "approval_policy=never",
         "-c", "sandbox_workspace_write.network_access=true",  # npx expo install needs the network
         *add_dirs, *rea,
+        *[a for img in images for a in ("-i", str(img))],  # attached to the prompt, so the model sees them for sure
         "--skip-git-repo-check",
         "--color", "never",
         "--json",
@@ -51,7 +52,7 @@ def command(app: Path, mcp: bool = False) -> list[str]:
 CREATE = """Read AGENTS.md and vibe.json. Build the app the user asked for:
 
 {request}
-{inspiration}{features}
+{inspiration}{references}{features}
 {naming} Set the name as "expo.name" in app.json. Implement the whole app, run `npx tsc --noEmit` until it passes, then finish. The first line of your final message must be `NAME: <the app name>`, followed by one short paragraph describing what the app does, written for a non-technical user. Do not mention TypeScript, code, builds or files."""
 
 INSPIRE = """
@@ -74,6 +75,23 @@ def inspiration_block(info: dict | None) -> str:
             + (INSPIRE_APK if info.get("apk") else ""))
 
 
+REFERENCES = """
+The user attached {count} picture(s) to show how the app should look: {files}. Open and look at every one of them before you start. Match their visual style: layout, spacing, colours, shapes, typography and overall mood, as far as it fits what the user asked for. They are a visual guide only: do not copy logos, brand names, icons or text from them.
+"""
+
+
+def references(app: Path) -> list[Path]:
+    """The user's reference pictures for the current request (saved by the API to references/)."""
+    return sorted((app / "references").glob("ref-*"))
+
+
+def references_block(app: Path) -> str:
+    files = references(app)
+    if not files:
+        return ""
+    return REFERENCES.format(count=len(files), files=", ".join(f"references/{f.name}" for f in files))
+
+
 NAME_PICK = ('Pick a plain name of one to three words that says what the app does, like "Book Ideas", "Calorie Counter" '
              'or "Video Editor": not a made-up brand and not the name of an existing app.')
 NAME_GIVEN = 'The user wants the app to be called "{name}"; use exactly that name.'
@@ -81,7 +99,7 @@ NAME_GIVEN = 'The user wants the app to be called "{name}"; use exactly that nam
 REVISE = """Read AGENTS.md and vibe.json. This app already exists and works. The user asks for this change:
 
 {request}
-
+{references}
 Implement it without breaking what is already there, run `npx tsc --noEmit` until it passes, then finish. Your final message must be one short paragraph describing what changed, written for a non-technical user. Do not mention TypeScript, code, builds or files."""
 
 AI_CHECK = """Do not change any files and do not run any commands; only answer. A user asked for {what}:
@@ -173,11 +191,13 @@ FIX = """Read AGENTS.md. The release build of this app failed. Here is the tail 
 Fix the cause, run `npx tsc --noEmit` until it passes, and finish with one sentence saying what you changed."""
 
 
-def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False) -> str:
+def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False, images: list[Path] = []) -> str:
     """Run Codex; emit('codex', line) per event, emit('model', name) once; return the final agent message. Raise on failure.
-    mcp=True adds REA's MCP server (APK analysis)."""
+    mcp=True adds REA's MCP server (APK analysis); images are attached to the prompt (-i)."""
+    for img in images:
+        emit("codex", f"attached {img.relative_to(app).as_posix()}")
     proc = workspace.popen(
-        app, command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        app, command(app, mcp, images), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, env=playstore.agent_env() if mcp else None,
     )
     proc.stdin.write(prompt)

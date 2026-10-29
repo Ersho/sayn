@@ -268,3 +268,13 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .modal.wide .shots img { height: 420px; }
 .try-frame { width: 300px; height: 600px; margin: 0 auto 8px; border: 8px solid #1c1c1e; border-radius: 30px; overflow: hidden; background: #fff; }
 .try-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+.pictures { border-radius: 12px; }
+.pictures.over { outline: 2px dashed var(--green); outline-offset: 6px; }
+.modal .pictures .field-label { font-size: 15px; font-weight: 600; margin: 16px 0 4px; }
+.picture-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.picture { position: relative; width: 72px; height: 72px; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; background: var(--soft); }
+.picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.picture button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .6); color: #fff; font-size: 15px; line-height: 1; padding: 0; }
+.picture.add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 13px; font-weight: 600; color: var(--green-ink); border-style: dashed; }
+.picture.add:hover { border-color: var(--green); }
