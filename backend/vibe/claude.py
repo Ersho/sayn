@@ -44,9 +44,8 @@ def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = Fa
     for line in proc.stdout:
         for text in _summarize(line):
             emit("codex", text)
-        try:
-            ev = json.loads(line)
-        except ValueError:
+        ev = _event(line)
+        if ev is None:
             continue
         if ev.get("type") == "system" and ev.get("model"):
             emit("model", ev["model"])  # what the CLI actually picked, even when no --model is given
@@ -66,11 +65,20 @@ def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = Fa
     return last_text.strip()
 
 
-def _summarize(line: str) -> Iterator[str]:
-    """Turn a stream-json event into one readable line (or nothing)."""
+def _event(line: str) -> dict | None:
+    """The stream-json event on this line, or None. Stderr is mixed in, and a stray line like `"text",` or `42` is
+    valid JSON too, so only objects count."""
     try:
         ev = json.loads(line)
     except ValueError:
+        return None
+    return ev if isinstance(ev, dict) else None
+
+
+def _summarize(line: str) -> Iterator[str]:
+    """Turn a stream-json event into one readable line (or nothing)."""
+    ev = _event(line)
+    if ev is None:
         if line.strip():
             yield line.rstrip()
         return

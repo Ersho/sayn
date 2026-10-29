@@ -207,9 +207,8 @@ def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = Fa
     for line in proc.stdout:
         for text in _summarize(line):
             emit("codex", text)
-        try:
-            ev = json.loads(line)
-        except ValueError:
+        ev = _event(line)
+        if ev is None:
             continue
         if ev.get("type") in ("turn.failed", "error"):
             failed = ev.get("error", {}).get("message") if isinstance(ev.get("error"), dict) else ev.get("message")
@@ -220,11 +219,20 @@ def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = Fa
     return last.read_text("utf-8").strip() if last.exists() else ""
 
 
-def _summarize(line: str) -> Iterator[str]:
-    """Turn a JSONL event into one readable line (or nothing)."""
+def _event(line: str) -> dict | None:
+    """The JSONL event on this line, or None. Stderr is mixed in, and a stray line like `"text",` or `42` is
+    valid JSON too, so only objects count."""
     try:
         ev = json.loads(line)
     except ValueError:
+        return None
+    return ev if isinstance(ev, dict) else None
+
+
+def _summarize(line: str) -> Iterator[str]:
+    """Turn a JSONL event into one readable line (or nothing)."""
+    ev = _event(line)
+    if ev is None:
         if line.strip():
             yield line.rstrip()
         return
