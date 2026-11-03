@@ -140,6 +140,22 @@ def save_inspiration(app: Path, app_id: str, use_apk: bool, use_reviews: bool, e
     return {"appId": app_id, "title": info["title"], "icon": info["icon"], "apk": apk, "reviews": bool(reviews), **cost(info)}
 
 
+def ensure_apk(app: Path, info: dict, emit: Callable[[str, str], None]) -> dict:
+    """The original's APK for "Make it closer to the original", downloaded once; returns the inspiration with "apk" set."""
+    apk = app / "inspiration" / "app.apk"
+    if not apk.exists():
+        apk.parent.mkdir(parents=True, exist_ok=True)
+        emit("inspire", f"downloading the APK of {info['appId']}")
+        try:
+            _download_apk(info["appId"], apk)
+            emit("inspire", f"APK saved ({apk.stat().st_size / 1e6:.1f} MB)")
+        except Exception as e:  # noqa: BLE001
+            apk.unlink(missing_ok=True)
+            emit("inspire", f"APK download failed, continuing with the listing only: {e}")
+            return {**info, "apk": False}
+    return {**info, "apk": True}
+
+
 def cost(info: dict) -> dict:
     """What the original charges, kept in vibe.json so the app card can show what the user saves."""
     return {k: info.get(k) for k in ("installs", "price", "ads", "iap")}
@@ -151,7 +167,8 @@ def _download(url: str, dst: Path) -> None:
 
 
 def _download_apk(package: str, dst: Path) -> None:
-    """APKPure serves either a plain APK or an XAPK (zip with the base APK inside)."""
+    """APKPure serves either a plain APK or an XAPK (zip with the base APK inside). An XAPK's split APKs (processor,
+    screen density, language) go to splits/ next to it: installing the original on a phone needs them."""
     if not re.fullmatch(r"[\w.]+", package):
         raise ValueError("bad package name")
     _download(APK_URL.format(package=package), dst)
@@ -165,4 +182,14 @@ def _download_apk(package: str, dst: Path) -> None:
         tmp = dst.with_suffix(".inner")
         with z.open(base) as src, open(tmp, "wb") as f:
             shutil.copyfileobj(src, f)
+        folder = dst.parent / "splits"
+        for name in names:
+            if name.endswith(".apk") and name != base:
+                folder.mkdir(exist_ok=True)
+                with z.open(name) as src, open(folder / Path(name).name, "wb") as f:
+                    shutil.copyfileobj(src, f)
     tmp.replace(dst)
+
+
+def splits(app: Path) -> list[Path]:
+    return sorted((app / "inspiration" / "splits").glob("*.apk"))

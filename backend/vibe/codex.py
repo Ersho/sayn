@@ -18,7 +18,7 @@ EXTRA_WRITABLE = [Path.home() / ".expo"] + (
     else [Path.home() / ".npm"])
 
 
-def command(app: Path, mcp: bool = False, images: list[Path] = []) -> list[str]:
+def command(app: Path, mcp: bool = False, images: list[Path] = [], web: bool = False) -> list[str]:
     add_dirs = []
     for d in EXTRA_WRITABLE:
         d.mkdir(parents=True, exist_ok=True)
@@ -39,6 +39,7 @@ def command(app: Path, mcp: bool = False, images: list[Path] = []) -> list[str]:
         "-c", "approval_policy=never",
         "-c", "sandbox_workspace_write.network_access=true",  # npx expo install needs the network
         *add_dirs, *rea,
+        *(["-c", 'web_search="live"'] if web else []),  # what `codex --search` turns on; exec has no such flag
         *[a for img in images for a in ("-i", str(img))],  # attached to the prompt, so the model sees them for sure
         "--skip-git-repo-check",
         "--color", "never",
@@ -66,6 +67,13 @@ The original app's APK is at inspiration/app.apk and you have the `rea` tools (i
 """
 
 
+INSPIRE_SPEC = """
+The original app was studied before you: inspiration/spec.md is a functional spec of it, from its APK and what people say about it online{phone}. Read it before writing code and build from it. It describes behaviour only: never copy code, strings, assets, package names or identifiers of the original.
+"""
+INSPIRE_SPEC_PHONE = (", plus a look through the app itself on the user's phone (screenshots in inspiration/screens/, "
+                      "named in the spec; look at the ones for the screens you build)")
+
+
 def inspiration_block(info: dict | None) -> str:
     if not info:
         return ""
@@ -73,6 +81,79 @@ def inspiration_block(info: dict | None) -> str:
     return (INSPIRE.format(title=info["title"], reviews_where=REVIEWS_WHERE if reviews else "",
                            reviews_how=REVIEWS_HOW if reviews else "")
             + (INSPIRE_APK if info.get("apk") else ""))
+
+
+# "Make it closer to the original": a revision built from the studying step's spec (or the listing when it failed).
+CLOSER = """Read AGENTS.md and vibe.json. This app already exists and works. It is the user's own version of the Play Store app "{title}", and the user wants it closer to that original: the same main screens, flows and features, arranged the way the original does it where that makes sense.
+{source}
+Keep everything the app already does and every change the user asked for earlier, keep its own name, and keep it free of accounts, ads and payments. Do not reuse the original's name, branding, icon, images or text. Run `npx tsc --noEmit` until it passes, then finish. Your final message must be one short paragraph describing what changed, written for a non-technical user. Do not mention TypeScript, code, builds or files."""
+CLOSER_LISTING = """
+The original's store description is in inspiration/listing.md and its store screenshots are inspiration/screenshot-*.png; read and look at them, and find what the app is still missing.
+"""
+
+
+def closer_prompt(info: dict, app: Path) -> str:
+    if (app / "inspiration" / "spec.md").exists():
+        phone = INSPIRE_SPEC_PHONE if any((app / "inspiration" / "screens").glob("*.png")) else ""
+        source = INSPIRE_SPEC.format(phone=phone) + "Compare the spec with this app and add or change what it is missing.\n"
+    else:
+        source = CLOSER_LISTING
+    return CLOSER.format(title=info["title"], source=source)
+
+
+# The "studying" step before the check (apps inspired by a Play Store app, with its APK). It writes the spec only.
+STUDY = """Read vibe.json. Do not change any app code and do not install anything; only write inspiration/spec.md. The user wants their own version of the Play Store app "{title}". Find out what that app really does, as a functional spec for building a new app:
+- inspiration/listing.md (its store description{reviews}) and inspiration/screenshot-*.png (its store screenshots): read the listing and look at every screenshot.
+{references}- inspiration/app.apk, with the `rea` tools (inspect_android_package, search_android_classes, inspect_android_class, inspect_android_method): its activities and screens, navigation, data model and the features it really has, including those behind a sign-in or a subscription.
+- The web: search for what people say about it and how it works: Reddit, X, YouTube, review sites, its own help pages and website. Use this for features the listing only hints at, screens you cannot see, and what people love or hate about it.
+
+Write inspiration/spec.md with these sections: Screens (each screen, what is on it, where it leads), Features, Data (what the user keeps in it), Content sources (what content the original serves from its servers or premium tier, and where a new version could get each kind), Sources (the web pages you used). Describe behaviour only: never copy code, strings, assets, package names or identifiers.
+
+Finish with only these lines: one `MISSING: <what>` line for each important thing you still could not find out (a screen, a flow, how a main feature behaves), in a few plain words a non-technical user understands, at most 5, the most important first; or the single line `MISSING: none` when the spec covers the app well."""
+STUDY_REVIEWS = " and a selection of user reviews"
+STUDY_REFERENCES = "- The user's own pictures of how their version should look: {files}. Look at them too; they describe the user's wishes, not the original.\n"
+
+
+def study_prompt(info: dict, app: Path) -> str:
+    files = references(app)
+    return STUDY.format(title=info["title"], reviews=STUDY_REVIEWS if info.get("reviews", True) else "",
+                        references=STUDY_REFERENCES.format(files=", ".join(f"references/{f.name}" for f in files)) if files else "")
+
+
+def parse_missing(answer: str) -> list[str]:
+    found = [s.strip("*`\". ") for s in re.findall(r"^\W*MISSING\W*:\s*(.+)", answer, re.I | re.M)]
+    return [s[:160] for s in found if s and s.lower() not in ("none", "nothing", "n/a")][:5]
+
+
+# The "exploring" step: the original runs on the user's phone and the agent drives it with phone.py.
+EXPLORE = """Read inspiration/spec.md. The Play Store app "{title}" is open on the user's phone. You can see and use it with this command, run from this folder (in PowerShell put `&` in front):
+
+{phone} look           a screenshot (saved to inspiration/screens/) and the numbered elements on screen
+{phone} tap N          tap element N of the last screen (or `tap X Y` for a spot on the screenshot)
+{phone} scroll down    (or `scroll up`)
+{phone} back           the phone's back button
+{phone} restart        open the app again from its start screen
+{phone} type TEXT      type into the selected field
+
+Every command prints the screen after it. Open the screenshot files to see each screen. Start with `look`.
+
+The spec still misses: {missing}. See those first, then every main screen once: tabs, menus, settings, the main add or create flows, empty states. Stop after about 60 commands.
+
+Rules, without exception: never sign in, sign up or register; never type an email address, phone number, password, name or any other personal detail; never buy, subscribe, start a trial or tap an ad (close it); never delete, send or share anything; type only harmless sample text such as a search word. If the app asks for a permission, deny it unless the screen you need cannot be reached without it.
+
+Then update inspiration/spec.md: add a "Seen on the phone" section with each screen you saw, its screenshot file (inspiration/screens/screen-NN.png), what is on it and where it leads, and correct the rest of the spec where the phone showed something else. You may search the web again for what you still could not see.
+
+Finish with exactly one line: `LOGIN: <one plain sentence saying what the app asks for>` when a sign-in or registration screen stopped you from seeing what the spec misses, otherwise `DONE`."""
+EXPLORE_SIGNED_IN = "\n\nThe user has just signed in on the phone themselves. Continue from the screen that is open now, with the same rules."
+
+
+def explore_prompt(info: dict, missing: list[str], phone: str) -> str:
+    return EXPLORE.format(title=info["title"], phone=phone, missing="; ".join(missing))
+
+
+def parse_login(answer: str) -> str:
+    m = re.search(r"^\W*LOGIN\W*:\s*(.+)", answer, re.I | re.M)
+    return m.group(1).strip().strip("*`\"")[:200] if m else ""
 
 
 REFERENCES = """
@@ -191,13 +272,14 @@ FIX = """Read AGENTS.md. The release build of this app failed. Here is the tail 
 Fix the cause, run `npx tsc --noEmit` until it passes, and finish with one sentence saying what you changed."""
 
 
-def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False, images: list[Path] = []) -> str:
+def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False, images: list[Path] = [],
+        web: bool = False) -> str:
     """Run Codex; emit('codex', line) per event, emit('model', name) once; return the final agent message. Raise on failure.
-    mcp=True adds REA's MCP server (APK analysis); images are attached to the prompt (-i)."""
+    mcp=True adds REA's MCP server (APK analysis); images are attached to the prompt (-i); web=True allows web search."""
     for img in images:
         emit("codex", f"attached {img.relative_to(app).as_posix()}")
     proc = workspace.popen(
-        app, command(app, mcp, images), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        app, command(app, mcp, images, web), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, env=playstore.agent_env() if mcp else None,
     )
     proc.stdin.write(prompt)
@@ -250,6 +332,8 @@ def _summarize(line: str) -> Iterator[str]:
                 yield f"{ch.get('kind', 'edit')} {ch.get('path')}"
         elif kind == "agent_message":
             yield item.get("text", "")
+        elif kind == "web_search":
+            yield f"[web search] {item.get('query', '')}".rstrip()
         elif kind == "reasoning":
             yield f"[thinking] {item.get('text', '')[:200]}"
         elif kind == "error":

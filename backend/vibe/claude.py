@@ -13,7 +13,7 @@ MCP_CONFIG = "inspiration/mcp.json"
 CLAUDE = "claude.cmd" if os.name == "nt" else "claude"
 
 
-def command(app: Path, mcp: bool = False) -> list[str]:
+def command(app: Path, mcp: bool = False, web: bool = False) -> list[str]:
     rea = []
     if mcp:  # REA's MCP server, so the agent can study inspiration/app.apk
         (app / MCP_CONFIG).write_text(json.dumps({"mcpServers": {"rea": {
@@ -26,15 +26,18 @@ def command(app: Path, mcp: bool = False) -> list[str]:
         "--permission-mode", "acceptEdits",
         *rea,
         "--allowedTools", "Bash", "PowerShell", "Edit", "Write", "Read", "Glob", "Grep", *(["mcp__rea"] if mcp else []),
+        *(["WebSearch", "WebFetch"] if web else []),
         *(["--model", MODEL] if MODEL else []),
     ]
 
 
-def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False, images: list[Path] = []) -> str:
+def run(app: Path, prompt: str, emit: Callable[[str, str], None], mcp: bool = False, images: list[Path] = [],
+        web: bool = False) -> str:
     """Run Claude Code; emit('codex', line) per event, emit('model', name) once; return the final message. Raise on failure.
-    mcp=True adds REA's MCP server (APK analysis). images are ignored: the prompt names them and Claude opens them with Read."""
+    mcp=True adds REA's MCP server (APK analysis); web=True allows web search. images are ignored: the prompt names
+    them and Claude opens them with Read."""
     proc = workspace.popen(
-        app, command(app, mcp), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        app, command(app, mcp, web), cwd=app, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace", bufsize=1, env=playstore.agent_env() if mcp else None,
     )
     proc.stdin.write(prompt)
@@ -94,7 +97,7 @@ def _summarize(line: str) -> Iterator[str]:
                 elif c["name"] in ("Edit", "Write"):
                     yield f"edit {inp.get('file_path', '')}"
                 else:
-                    yield f"{c['name']} {inp.get('file_path') or inp.get('pattern') or ''}".rstrip()
+                    yield f"{c['name']} {inp.get('file_path') or inp.get('pattern') or inp.get('query') or inp.get('url') or ''}".rstrip()
     elif t == "user":
         for c in ev["message"].get("content", []):
             if c.get("type") == "tool_result" and c.get("is_error"):

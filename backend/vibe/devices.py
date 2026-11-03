@@ -181,15 +181,26 @@ def installed_packages(serial: str, platform: str = "android", kind: str = "devi
         return set()
 
 
-def install(serial: str, apk: Path) -> None:
+ABIS = {"arm64_v8a", "armeabi_v7a", "x86", "x86_64"}
+
+
+def install(serial: str, apk: Path, splits: list[Path] = []) -> None:
     # adb binary: adbutils' install goes through a push + pm path that is slow for 60MB APKs.
-    r = subprocess.run([ADB, "-s", serial, "install", "-r", str(apk)], capture_output=True, text=True)
+    if splits:  # an XAPK's split APKs (config.arm64_v8a.apk, config.xxhdpi.apk, ...): skip other processors' ones
+        abi = client.device(serial).prop.get("ro.product.cpu.abi").replace("-", "_")
+        splits = [s for s in splits if s.stem.rsplit(".", 1)[-1] not in ABIS - {abi}]
+    r = subprocess.run([ADB, "-s", serial, "install-multiple" if splits else "install", "-r", str(apk),
+                        *map(str, splits)], capture_output=True, text=True)
     if r.returncode != 0:
         msg = (r.stderr or r.stdout).strip().splitlines()[-1:] or ["adb install failed"]
         err = msg[0].replace("adb.exe: ", "")
         if "INSTALL_FAILED_USER_RESTRICTED" in err:
             err += " (on Xiaomi/HyperOS phones enable 'Install via USB' in Developer options, then approve the prompt on the phone)"
         raise RuntimeError(err)
+
+
+def uninstall(serial: str, package: str) -> None:
+    client.device(serial).uninstall(package)
 
 
 def launch(serial: str, package: str) -> None:

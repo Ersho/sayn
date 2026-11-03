@@ -22,8 +22,9 @@ app = FastAPI(title="vibeApping")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
 TERMINAL = {"ready", "failed", "cancelled", "deployed", "unknown"}
-BUSY = {"created", "preparing", "inspiring", "checking", "waiting", "reviewing", "coding", "building", "fixing"}
-HOLDABLE = {"created", "preparing", "inspiring", "checking", "waiting", "coding"}  # before the code is finished
+BUSY = {"created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding",
+        "building", "fixing"}
+HOLDABLE = {"created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "coding"}  # before the code is finished
 EVENTS_FILE = "events.jsonl"
 
 
@@ -40,7 +41,7 @@ def _events(app_id: str) -> list[dict]:
 
 class Inspiration(BaseModel):
     app_id: str   # Play Store package name
-    apk: bool = False  # also download the APK and let the agent study it with REA
+    apk: bool = False  # also download the APK and let the agent study it with REA while it writes the code
     reviews: bool = True  # give the agent user reviews: keep what people praise, fix what they complain about
 
 
@@ -73,7 +74,7 @@ class KeyValue(BaseModel):
 
 
 class Answer(BaseModel):
-    use_ai: bool
+    yes: bool  # "ai": use the key; "explore": try the original on the phone; "login": the user signed in, carry on
 
 
 class Plan(BaseModel):
@@ -179,7 +180,7 @@ def get_apps():
         a["artifact"] = build.artifact_path(workspace.app_dir(a["id"])).exists()
         a["ai_used"] = [settings.PROVIDERS[p]["label"] for p in settings.used_providers(workspace.app_dir(a["id"]))]
         a["held"] = a["id"] in workspace.HOLDS
-        if a["status"] == "waiting" and a.get("question"):  # a key added in Settings meanwhile shows up right away
+        if a["status"] == "waiting" and a.get("question", {}).get("kind", "ai") == "ai":  # a key added in Settings meanwhile shows up right away
             a["question"]["key"] = settings.pick(a["question"]["provider"])
     return apps
 
@@ -281,6 +282,23 @@ def post_revise(app_id: str, body: Revise):
     return {"id": app_id}
 
 
+@app.post("/apps/{app_id}/closer")
+def post_closer(app_id: str):
+    """"Make it closer to the original" for an app made from a Play Store app: a deep study of the original (its APK,
+    the web, and the phone if the user agrees), then a revision built from it."""
+    _exists(app_id)
+    if not workspace.read_vibe(app_id).get("inspiration"):
+        raise HTTPException(400, "This app was not made from a Play Store app.")
+    if not playstore.apk_ready():
+        raise HTTPException(400, "Studying the original is not set up on this computer yet. Run the setup script again.")
+    if workspace.read_status(app_id)["status"] in BUSY:
+        raise HTTPException(409, "app is busy")
+    workspace.write_status(app_id, "created")
+    emit(app_id, "status", "created")
+    build.start(build.closer, app_id, lambda k, t: emit(app_id, k, t))
+    return {"id": app_id}
+
+
 MAX_IMAGES = 4
 MAX_IMAGE_MB = 8
 IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
@@ -333,18 +351,19 @@ def post_cancel(app_id: str):
 
 @app.post("/apps/{app_id}/answer")
 def post_answer(app_id: str, body: Answer):
-    """The user's answer to "this app wants to use AI": the paused job carries on with or without the key."""
+    """The user's answer to the question the paused job asks (status.json "question"): it carries on either way."""
     _exists(app_id)
     st = workspace.read_status(app_id)
     if st["status"] != "waiting":
         raise HTTPException(409, "This app is not waiting for an answer.")
-    if body.use_ai and not settings.pick(st["question"]["provider"]):
+    question = st["question"]
+    if body.yes and question.get("kind", "ai") == "ai" and not settings.pick(question["provider"]):
         raise HTTPException(400, "Add a working key in Settings first.")
     if app_id not in workspace.JOBS:  # the backend restarted while the job was waiting
         workspace.write_status(app_id, "cancelled")
         emit(app_id, "status", "cancelled")
         raise HTTPException(409, "This build stopped while it waited. Start it again.")
-    workspace.ANSWERS[app_id] = body.use_ai
+    workspace.ANSWERS[app_id] = body.yes
     return {"ok": True}
 
 

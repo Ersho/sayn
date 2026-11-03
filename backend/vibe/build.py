@@ -5,12 +5,13 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
-from . import claude, codex, ios, playstore, settings, workspace
+from . import claude, codex, devices, ios, playstore, settings, workspace
 
 MAX_FIX_ROUNDS = 5
 ERROR_TAIL = 200
@@ -178,6 +179,18 @@ def revise(app_id: str, request: str, emit: Emit) -> None:
          ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request, plan=""))
 
 
+def closer(app_id: str, emit: Emit) -> None:
+    """"Make it closer to the original": study the original deeply (_study), then revise the app from the spec."""
+    vibe = workspace.read_vibe(app_id)
+    title = vibe["inspiration"]["title"]
+    _job(app_id, emit, vibe.get("agent", "codex"),
+         lambda info, _: codex.closer_prompt(info or vibe["inspiration"], workspace.app_dir(app_id)),
+         "closer to the original", after=lambda _: _bump_version(app_id),
+         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, plan="",
+                                        request=f'Make it closer to the original app "{title}": its screens, flows and features.'),
+         study=True)
+
+
 def _review(app_id: str, plan: dict, status: Callable) -> dict:
     """Wait in "reviewing" until the user confirms the features (POST /apps/{id}/plan)."""
     status("reviewing", plan=plan)
@@ -201,7 +214,9 @@ def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Em
     status("checking")
     listing = app / "inspiration" / "listing.md"  # an inspired app's request is one line; its features are here
     if listing.exists():
-        ai_check += codex.AI_CHECK_LISTING.format(listing=listing.read_text("utf-8")[:6000])
+        spec = app / "inspiration" / "spec.md"  # written by the studying step
+        ai_check += codex.AI_CHECK_LISTING.format(listing=listing.read_text("utf-8")[:6000]
+                                                  + ("\n\n" + spec.read_text("utf-8")[:6000] if spec.exists() else ""))
     answer = run(app, ai_check, emit)
     need, wanted, why, online = codex.parse_ai_check(answer)
     online = online or vibe.get("online", "")
@@ -216,22 +231,93 @@ def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Em
     elif not need:
         workspace.update_vibe(app_id, ai=False)
         return None, online, answer
-    status("waiting", question={"why": why, "provider": wanted})
-    while app_id not in workspace.ANSWERS:
-        workspace.check_cancelled(app_id)
-        time.sleep(0.5)
-    provider = settings.pick(wanted) if workspace.ANSWERS.pop(app_id) else None
+    provider = settings.pick(wanted) if _ask(app_id, status, kind="ai", why=why, provider=wanted) else None
     emit("build", f"AI: {provider or 'not used'}")
     workspace.update_vibe(app_id, ai=provider or False)
     return provider, online, answer
 
 
+def _ask(app_id: str, status: Callable, **question) -> bool:
+    """Wait in "waiting" until the user answers (POST /apps/{id}/answer). question["kind"] is "ai", "explore" or "login"."""
+    status("waiting", question=question)
+    while app_id not in workspace.ANSWERS:
+        workspace.check_cancelled(app_id)
+        time.sleep(0.5)
+    return workspace.ANSWERS.pop(app_id)
+
+
+PHONE_TOOL = Path(__file__).with_name("phone.py")
+MAX_LOGIN_ROUNDS = 2
+
+
+def _study(app_id: str, info: dict, run: Callable, status: Callable, emit: Emit) -> None:
+    """Write inspiration/spec.md from the listing, screenshots, APK (REA) and the web. When the agent still misses
+    something and an Android phone is connected, the user may let it look through the original on that phone; when a
+    sign-in stops it there, the user may sign in on the phone themselves and let it carry on. Every part is optional:
+    a failure is logged and the job continues with what it has."""
+    app = workspace.app_dir(app_id)
+    status("studying")
+    shutil.rmtree(app / "inspiration" / "screens", ignore_errors=True)  # from an earlier study
+    try:
+        missing = codex.parse_missing(run(app, codex.study_prompt(info, app), emit, mcp=True, web=True,
+                                          images=codex.references(app)))
+    except Exception as e:  # noqa: BLE001
+        workspace.check_cancelled(app_id)
+        emit("build", f"studying the original failed, continuing with the listing: {e}")
+        return
+    if not missing:
+        return
+    emit("build", "still unclear: " + "; ".join(missing))
+    phone = next((d for d in devices.list_devices() if d["platform"] == "android" and d["state"] == "device"), None)
+    if not phone:
+        emit("build", "no Android phone connected, so the original is not tried on a phone")
+        return
+    serial, package = phone["serial"], info["appId"]
+    had = package in devices.installed_packages(serial)
+    device = phone["name"] or phone["model"] or "phone"
+    if not _ask(app_id, status, kind="explore", missing=missing, device=device, installed=had, title=info["title"]):
+        return
+    status("exploring")
+    config = app / "inspiration" / "phone.json"  # read by phone.py
+    ours = False  # installed by this step, so removed again afterwards
+    try:
+        if not had:
+            emit("build", f"installing {info['title']} on {device} for a look")
+            devices.install(serial, app / "inspiration" / "app.apk", playstore.splits(app))
+            ours = True
+        devices.launch(serial, package)
+        time.sleep(3)
+        config.write_text(json.dumps({"serial": serial, "package": package}), "utf-8")
+        tool = f'"{sys.executable}" "{PHONE_TOOL}"'
+        prompt = codex.explore_prompt(info, missing, tool)
+        for round_ in range(MAX_LOGIN_ROUNDS + 1):
+            login = codex.parse_login(run(app, prompt, emit, web=True))
+            if not login or round_ == MAX_LOGIN_ROUNDS:
+                break
+            emit("build", f"sign-in needed: {login}")
+            if not _ask(app_id, status, kind="login", what=login, device=device, title=info["title"]):
+                break
+            status("exploring")
+            prompt = codex.explore_prompt(info, missing, tool) + codex.EXPLORE_SIGNED_IN
+    except Exception as e:  # noqa: BLE001
+        workspace.check_cancelled(app_id)
+        emit("build", f"looking at the original on the phone failed, continuing without it: {e}")
+    finally:
+        config.unlink(missing_ok=True)
+        if ours:  # put the phone back the way it was
+            try:
+                devices.uninstall(serial, package)
+                emit("build", f"removed {info['title']} from {device} again")
+            except Exception as e:  # noqa: BLE001
+                emit("build", f"could not remove {info['title']} from {device}: {e}")
+
+
 def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dict | None], str], commit: str,
-         after: Callable[[str], None], ai_check: str, inspiration: dict | None = None) -> None:
+         after: Callable[[str], None], ai_check: str, inspiration: dict | None = None, study: bool = False) -> None:
     app = workspace.app_dir(app_id)
     agent_run = runner(agent).run
 
-    def run(app, prompt, emit, mcp=False, images=[]):
+    def run(app, prompt, emit, mcp=False, images=[], web=False):
         def on_event(kind: str, text: str):
             if kind == "model":  # the model the agent CLI reports; shown in the dashboard
                 workspace.update_vibe(app_id, model=text)
@@ -241,7 +327,7 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
         vibe = workspace.read_vibe(app_id)
         target = vibe.get("platform", "android")
         prompt += f"\nTarget platform: {target}. Keep native APIs and permission declarations correct for this platform."
-        return agent_run(app, prompt, on_event, mcp=mcp, images=images)
+        return agent_run(app, prompt, on_event, mcp=mcp, images=images, web=web)
 
     def status(s: str, **extra):
         workspace.check_cancelled(app_id)
@@ -257,6 +343,12 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
             status("inspiring")
             info = playstore.save_inspiration(app, inspiration["app_id"], inspiration["apk"], inspiration["reviews"], emit)
             workspace.update_vibe(app_id, inspiration=info)
+        if study:  # "Make it closer to the original"
+            status("inspiring")
+            info = playstore.ensure_apk(app, workspace.read_vibe(app_id)["inspiration"], emit)
+            workspace.update_vibe(app_id, inspiration=info)
+            if info["apk"]:
+                _study(app_id, info, run, status, emit)
         provider, online, answer = _check(app_id, ai_check, run, status, emit)
         key_names = settings.write_env(app, provider)  # the one key the user agreed to, as EXPO_PUBLIC_* in .env
         plan = codex.parse_plan(answer) if commit == "create" else None
@@ -278,7 +370,8 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
                 emit("build", "prompt:" + codex.references_block(app).rstrip())
             try:
                 message = run(app, prompt(info, plan) + settings.keys_block(key_names) + codex.online_block(online),
-                              emit, mcp=bool(info and info["apk"]), images=codex.references(app))
+                              emit, mcp=bool(info and info["apk"] and not study),
+                              images=codex.references(app))
                 break
             except Exception:
                 if not plan or app_id not in workspace.HOLDS or app_id in workspace.CANCELLED:

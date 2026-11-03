@@ -14,10 +14,14 @@ type App = {
   fix_rounds?: number; version: string; build: number; created: number; updated: number;
   history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
   inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean } & Partial<StoreCost>;
-  ai_used: string[]; online?: string; question?: { why: string; provider: string; key: string | null };
+  ai_used: string[]; online?: string; question?: Question;
   plan?: Plan; held?: boolean; features?: string[];
 };
 type Plan = { name: string; features: string[]; extras: string[] };
+// What a job in "waiting" asks. kind "ai": may the app use an AI key; "explore": may the assistant try the original app
+// on the phone (missing = what it could not find out otherwise); "login": the original asks to sign in (what).
+type Question = { kind?: "ai" | "explore" | "login"; why?: string; provider?: string; key?: string | null;
+  missing?: string[]; device?: string; installed?: boolean; title?: string; what?: string };
 type StoreApp = {
   appId: string; title: string; developer: string; icon: string; score: number | null; installs: string | null;
   genre: string | null; summary: string;
@@ -55,12 +59,12 @@ function ago(t: number) {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", checking: "Understanding features",
+  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", studying: "Studying the original", exploring: "Trying the original", checking: "Understanding features",
   waiting: "Needs your answer", reviewing: "Waiting for your review", coding: "Writing code", building: "Building",
   fixing: "Fixing build", ready: "Ready to install", failed: "Failed", cancelled: "Cancelled", unknown: "Imported",
 };
-const BUSY = new Set(["created", "preparing", "inspiring", "checking", "waiting", "reviewing", "coding", "building", "fixing"]);
-const BEFORE_CODE = new Set(["created", "preparing", "inspiring", "checking", "waiting"]);
+const BUSY = new Set(["created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding", "building", "fixing"]);
+const BEFORE_CODE = new Set(["created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting"]);
 const PROVIDER_LABEL: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic (Claude)", gemini: "Google Gemini" };
 const CATEGORY_LABEL: Record<string, string> = {
   PRODUCTIVITY: "Productivity", HEALTH_AND_FITNESS: "Health & fitness", LIFESTYLE: "Lifestyle", TOOLS: "Tools",
@@ -97,6 +101,7 @@ const I = {
   claude: <svg viewBox="0 0 20 20"><path d="M10 3v14M3 10h14M5 5l10 10M15 5L5 15" /></svg>,
   codex: <svg viewBox="0 0 20 20"><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z" /><path d="M10 6.5l3 1.75v3.5L10 13.5l-3-1.75v-3.5z" /></svg>,
   bulb: <svg viewBox="0 0 20 20"><path d="M7 14.5a5.5 5.5 0 1 1 6 0V16a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1z" /><path d="M8.5 18.5h3" /></svg>,
+  clock: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M10 6v4l2.5 2" /></svg>,
   globe: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M2.5 10h15M10 2.5c2.2 2.2 2.2 12.8 0 15M10 2.5c-2.2 2.2-2.2 12.8 0 15" /></svg>,
   gear: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>,
   pause: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M8.25 7v6M11.75 7v6" /></svg>,
@@ -155,19 +160,22 @@ function Badge({ status }: { status: string }) {
   );
 }
 
-function Progress({ status, log, inspired }: { status: string; log: string[]; inspired?: boolean }) {
+function Progress({ status, log, inspired, asking }: { status: string; log: string[]; inspired?: boolean; asking?: Question["kind"] }) {
   const [showLog, setShowLog] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
   useEffect(() => { if (showLog) logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [log, showLog]);
   const keys = ["preparing", ...(inspired ? ["inspiring"] : []), "checking", "coding", "building", "ready"];
+  const phoneStep = status === "exploring" || (status === "waiting" && (asking === "explore" || asking === "login"));
   const label: Record<string, string> = {
-    preparing: "Preparing project", inspiring: "Studying the original app",
+    preparing: "Preparing project",
+    inspiring: phoneStep ? (status === "waiting" ? "Waiting for your answer" : "Trying the original on your phone") : "Studying the original app",
     checking: status === "waiting" ? "Waiting for your answer" : status === "reviewing" ? "Waiting for your review" : "Understanding the features",
     coding: "Writing the code",
     building: status === "fixing" ? "Fixing the build" : "Building the app", ready: "Ready to install",
   };
   const steps = keys.map((k) => label[k]);
-  const idx = keys.indexOf(status === "fixing" ? "building" : status === "waiting" || status === "reviewing" ? "checking" : status);
+  const idx = keys.indexOf(status === "fixing" ? "building" : phoneStep || status === "studying" ? "inspiring"
+    : status === "waiting" || status === "reviewing" ? "checking" : status);
   return (
     <div className="progress">
       <ol className="steps">
@@ -185,19 +193,47 @@ function Progress({ status, log, inspired }: { status: string; log: string[]; in
   );
 }
 
-/** Shown while a job waits in "waiting": the app needs AI, and the user decides whether it gets a key. */
-function AiQuestion({ app, reload, go }: { app: App; reload: () => void; go?: (v: View) => void }) {
+/** Shown while a job waits in "waiting": whether the app gets an AI key, or whether the assistant may try the
+ *  original app on the phone (and carry on once the user signed in there). */
+function AskUser({ app, reload, go }: { app: App; reload: () => void; go?: (v: View) => void }) {
   const [sending, setSending] = useState(false);
   const q = app.question;
   if (app.status !== "waiting" || !q) return null;
-  const wanted = PROVIDER_LABEL[q.provider] ?? "AI";
-  const answer = async (use_ai: boolean) => {
+  const answer = async (yes: boolean) => {
     setSending(true);
-    try { await api(`/apps/${app.id}/answer`, { method: "POST", body: JSON.stringify({ use_ai }) }); }
+    try { await api(`/apps/${app.id}/answer`, { method: "POST", body: JSON.stringify({ yes }) }); }
     catch (e) { alert(String(e)); }
     setSending(false);
     reload();
   };
+  if (q.kind === "explore") return (
+    <div className="ai-ask">
+      <b><Icon i={I.phone} />Try {q.title} on your phone?</b>
+      <p>Your assistant read its store page, looked inside the app and searched what people say about it online, but could not find out:</p>
+      <ul>{q.missing?.map((m) => <li key={m}>{m}</li>)}</ul>
+      <p>{q.installed
+        ? `It is already on your ${q.device}. Your assistant can open it and look through its screens for a few minutes, so it may see what you keep in that app.`
+        : `Your assistant can install it on your ${q.device}, look through its screens for a few minutes, and remove it again afterwards.`}</p>
+      <p className="muted small">It never signs in, buys anything or types your details. Keep the phone unlocked and leave it alone while it works.</p>
+      <div className="row-end">
+        <button className="outline" disabled={sending} onClick={() => answer(false)}>Skip</button>
+        <button className="primary" disabled={sending} onClick={() => answer(true)}>Try it on my phone</button>
+      </div>
+    </div>
+  );
+  if (q.kind === "login") return (
+    <div className="ai-ask">
+      <b><Icon i={I.phone} />{q.title} asks you to sign in</b>
+      {q.what && <p>{q.what}</p>}
+      <p>To see the rest, sign in on your {q.device} yourself, then press Continue. Your assistant never sees or types your password.</p>
+      <p className="muted small">Or skip: your app is then built from what it found so far.</p>
+      <div className="row-end">
+        <button className="outline" disabled={sending} onClick={() => answer(false)}>Skip</button>
+        <button className="primary" disabled={sending} onClick={() => answer(true)}>I signed in, continue</button>
+      </div>
+    </div>
+  );
+  const wanted = PROVIDER_LABEL[q.provider ?? ""] ?? "AI";
   return (
     <div className="ai-ask">
       <b><Icon i={I.bulb} />This app wants to use AI</b>
@@ -361,6 +397,7 @@ function describeCommit(m: string) {
   if (fix) return `Build fix #${fix[1]}`;
   const rev = m.match(/^(?:codex|claude): revise: (.*)/);
   if (rev) return `Revised: ${rev[1]}`;
+  if (/^(codex|claude): closer to the original$/.test(m)) return "Made closer to the original app";
   return m;
 }
 
@@ -372,6 +409,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
   const [shotKey, setShotKey] = useState(0);
   const [details, setDetails] = useState(false);
   const [making, setMaking] = useState(false);
+  const [closer, setCloser] = useState(false);
   const phones = app.installed_on.map((s) => devices.find((d) => d.serial === s)?.name || devices.find((d) => d.serial === s)?.model || s);
   const busy = BUSY.has(app.status);
   return (
@@ -402,7 +440,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
         {app.ai_used.length > 0 && <p className="uses-ai" title="Each use is billed to your API key"><Icon i={I.bulb} />Uses AI · {app.ai_used.join(", ")}</p>}
         {app.online && <p className="uses-ai" title="Free public data, looked up over the internet"><Icon i={I.globe} />Uses internet · {app.online}</p>}
         {phones.length > 0 &&<p className="installed"><Icon i={I.check} />Installed on {phones.join(", ")}</p>}
-        <AiQuestion app={app} reload={reload} go={go} />
+        <AskUser app={app} reload={reload} go={go} />
         <Features app={app} reload={reload} />
         {app.status === "failed" && <details className="fail"><summary>Build failed, show details</summary><pre>{app.error}</pre></details>}
         <button className="link" onClick={() => setHistory((v) => !v)}>Version history <Icon i={I.arrow} /></button>
@@ -411,6 +449,10 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
             {app.history.map((h, i) => <li key={i}><span className="muted">{fmtDate(h.time)}</span>{describeCommit(h.message)}</li>)}
           </ol>
         )}
+        {app.inspiration && !busy && app.artifact && (
+          <button className="outline closer-btn" title={`Study ${app.inspiration.title} in depth and update your app to match it`}
+            onClick={() => setCloser(true)}><Icon i={I.star} />Make it closer to {shortTitle(app.inspiration.title)}</button>
+        )}
         <div className="card-actions">
           {busy
             ? <CancelButton app={app} reload={reload} />
@@ -418,6 +460,8 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
           <DeployButton app={app} devices={devices} go={go} onDone={() => { setShotKey(Date.now()); reload(); }} />
         </div>
       </div>
+      {closer && app.inspiration && <CloserDialog app={app} title={shortTitle(app.inspiration.title)} onClose={() => setCloser(false)}
+        onStarted={() => { setCloser(false); reload(); }} />}
       {details && (
         <div className="modal-bg" onClick={() => setDetails(false)}>
           <div className="modal wide" onClick={(e) => e.stopPropagation()}>
@@ -544,6 +588,43 @@ function ReviseDialog({ app, onClose, onStarted }: { app: App; onClose: () => vo
   );
 }
 
+/** "Duolingo: Learn Languages" → "Duolingo": store titles carry a tagline after a colon or dash. */
+const shortTitle = (title: string) => title.split(/:| - | – /)[0].trim();
+
+/** "Make it closer to the original": a long, deep study of the original app, so the user is told what to expect first. */
+function CloserDialog({ app, title, onClose, onStarted }: { app: App; title: string; onClose: () => void; onStarted: () => void }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <p className="eyebrow">{app.name}</p>
+        <h2>Make it closer to {title}</h2>
+        <p className="sub">Your first version was made from {title}'s store page. This takes a much closer look at the real app, then improves yours to match it.</p>
+        <p className="field-label">What happens</p>
+        <ol className="closer-steps">
+          <li><b>It studies {title}.</b> Your assistant looks inside the app to see its screens and features, including the ones behind a sign-in or subscription, and reads what people say about it online, on Reddit, YouTube and review sites.</li>
+          <li><b>It may try {title} on your phone.</b> Only if something is still unclear, and only if you agree. It looks through the screens for a few minutes, and if it had to install the app, it removes it again afterwards. It never signs in, buys anything or types your details. If the app wants you to sign in, you can do that on the phone yourself, or skip.</li>
+          <li><b>It updates your app.</b> It adds the screens and features yours is missing and arranges them more like the original. Everything your app already does stays, and so do its name, your earlier changes, and the fact that it is free with no ads.</li>
+        </ol>
+        <p className="muted small">Only the ideas are borrowed: the original's name, logo, pictures and text are never copied.</p>
+        <div className="ai-ask">
+          <b><Icon i={I.clock} />This takes a while</b>
+          <p>Often half an hour or more. Your current version keeps working on your phone the whole time, and if you stop, your app stays exactly as it is now.</p>
+          <p>Keep your phone connected and nearby, in case it asks to try {title} there.</p>
+        </div>
+        <div className="row-end">
+          <button className="outline" onClick={onClose}>Not now</button>
+          <button className="primary" disabled={busy} onClick={async () => {
+            setBusy(true);
+            try { await api(`/apps/${app.id}/closer`, { method: "POST" }); onStarted(); }
+            catch (e) { alert(String(e)); setBusy(false); }
+          }}>{busy ? "Starting…" : "Start"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AgentPicker({ agent, setAgent }: { agent: keyof typeof AGENTS; setAgent: (a: keyof typeof AGENTS) => void }) {
   return (
     <>
@@ -631,7 +712,6 @@ function OriginalCost({ d }: { d: StoreCost }) {
     </div>
   );
 }
-
 function StoreCard({ app, onPick }: { app: StoreApp; onPick: (a: StoreApp) => void }) {
   return (
     <article className="store-card">
@@ -707,17 +787,14 @@ function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
 
 function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; devices: Device[]; onClose: () => void; onStarted: (id: string) => void }) {
   const [details, setDetails] = useState<StoreDetails | null>(null);
-  const [apkReady, setApkReady] = useState(false);
   const [more, setMore] = useState(false);
   const [notes, setNotes] = useState("");
   const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
-  const [apk, setApk] = useState(false);
   const [reviews, setReviews] = useState(true);
   const [target, setTarget] = useState<BuildTarget>(ANDROID_TARGET);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api<StoreDetails>(`/inspire/app/${app.appId}`).then(setDetails).catch(() => setDetails(null));
-    api<{ apk_ready: boolean }>("/inspire").then((i) => setApkReady(i.apk_ready)).catch(() => {});
   }, [app.appId]);
   const good = details?.reviews.filter((r) => r.score >= 4).length ?? 0;
   const bad = details?.reviews.filter((r) => r.score <= 2).length ?? 0;
@@ -751,15 +828,6 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
             <small>{details ? `Your assistant reads ${details.reviews.length} user reviews (${good} happy, ${bad} unhappy)` : "Your assistant reads user reviews"} to keep what people love and fix what they complain about. Untick to build from the description and screenshots only.</small>
           </span>
         </label>
-        <label className={`check ${apkReady ? "" : "off"}`}>
-          <input type="checkbox" checked={apk} disabled={!apkReady} onChange={(e) => setApk(e.target.checked)} />
-          <span>
-            <b>Also study the original app itself</b>
-            <small>{apkReady
-              ? "Downloads the app and lets your assistant look at how it is built, for a closer match of screens and features. Adds roughly 5 extra minutes."
-              : "Not set up on this laptop yet. Run scripts\\setup.ps1 again to enable it."}</small>
-          </span>
-        </label>
         <TargetPicker target={target} setTarget={setTarget} devices={devices} />
         <AgentPicker agent={agent} setAgent={setAgent} />
         <div className="row-end">
@@ -767,7 +835,7 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
           <button className="primary" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
-              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, ...targetBody(target, devices), inspiration: { app_id: app.appId, apk, reviews } }) });
+              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, ...targetBody(target, devices), inspiration: { app_id: app.appId, reviews } }) });
               onStarted(r.id);
             } catch (e) { alert(String(e)); setBusy(false); }
           }}>{busy ? "Starting…" : "Build my version"} <Icon i={I.arrow} /></button>
@@ -1108,8 +1176,8 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
                 <div className="meta">{app?.agent === "claude" ? "Claude Code" : "Codex"}{app?.model ? ` (${app.model})` : ""} is on it · {app?.platform === "ios" ? "iPhone / iPad" : "Android"}</div></div>
               <Badge status={status || app?.status || "created"} />
             </div>
-            <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} />
-            {app && <AiQuestion app={app} reload={reload} go={go} />}
+            <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} asking={app?.question?.kind} />
+            {app && <AskUser app={app} reload={reload} go={go} />}
             {app && <Features app={app} reload={reload} />}
             {app && running && <div className="row-end"><CancelButton app={app} reload={reload} /></div>}
             {app && !BUSY.has(app.status) && (

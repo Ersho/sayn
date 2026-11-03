@@ -100,6 +100,9 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .history li { display: flex; gap: 10px; } .history .muted { width: 110px; flex-shrink: 0; }
 .fail summary { cursor: pointer; color: var(--bad-text); font-size: 14px; }
 .fail pre { white-space: pre-wrap; font-size: 11px; max-height: 200px; overflow: auto; background: #f6f6f6; padding: 8px; border-radius: 8px; }
+.closer-steps { margin: 4px 0 10px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; line-height: 1.5; }
+.closer-steps b { color: var(--text); }
+.closer-btn { width: 100%; justify-content: center; margin-top: 6px; }
 .card-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
 .deploy { display: inline-flex; gap: 8px; align-items: center; }
 
@@ -250,6 +253,7 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .ai-ask { border: 1px solid #f0d9a6; background: #fffaf0; border-radius: 12px; padding: 14px 16px; margin-top: 14px; display: flex; flex-direction: column; gap: 6px; line-height: 1.45; }
 .ai-ask b { display: flex; align-items: center; gap: 6px; color: var(--busy-text); }
 .ai-ask .row-end { margin-top: 8px; }
+.ai-ask ul { margin: 0; padding-left: 20px; }
 .features { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 .pause-card { display: flex; align-items: center; gap: 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; color: var(--green-ink); }
 .pause-card.on { background: var(--green-light); border-color: transparent; }
