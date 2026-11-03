@@ -137,7 +137,12 @@ def save_inspiration(app: Path, app_id: str, use_apk: bool, use_reviews: bool, e
             emit("inspire", f"APK saved ({(folder / 'app.apk').stat().st_size / 1e6:.1f} MB)")
         except Exception as e:  # noqa: BLE001
             emit("inspire", f"APK download failed, continuing with the listing only: {e}")
-    return {"appId": app_id, "title": info["title"], "icon": info["icon"], "apk": apk, "reviews": bool(reviews)}
+    return {"appId": app_id, "title": info["title"], "icon": info["icon"], "apk": apk, "reviews": bool(reviews), **cost(info)}
+
+
+def cost(info: dict) -> dict:
+    """What the original charges, kept in vibe.json so the app card can show what the user saves."""
+    return {k: info.get(k) for k in ("installs", "price", "ads", "iap")}
 
 
 def _download(url: str, dst: Path) -> None:

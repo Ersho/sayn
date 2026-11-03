@@ -6,6 +6,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = Path.home() / "vibeapping"
@@ -157,7 +158,14 @@ def write_status(app_id: str, status: str, **extra) -> dict:
 
 def read_status(app_id: str) -> dict:
     p = app_dir(app_id) / STATUS_FILE
-    return json.loads(p.read_text("utf-8-sig")) if p.exists() else {"status": "unknown"}
+    for _ in range(20):  # write_status truncates before writing; a read in between sees an empty file
+        if not p.exists():
+            return {"status": "unknown"}
+        try:
+            return json.loads(p.read_text("utf-8-sig"))
+        except json.JSONDecodeError:
+            time.sleep(0.05)
+    return json.loads(p.read_text("utf-8-sig"))
 
 
 def read_vibe(app_id: str) -> dict:

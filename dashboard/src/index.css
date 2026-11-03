@@ -209,6 +209,13 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .rating .ic svg { stroke: none; }
 .inspired-by { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .inspired-by img { width: 20px; height: 20px; border-radius: 6px; }
+.saves { font-size: 13px; color: var(--green-ink); display: flex; align-items: center; gap: 6px; }
+.cost { background: var(--green-light); border-radius: 12px; padding: 14px 16px; margin: 0 0 16px; color: var(--green-ink); }
+.cost .eyebrow { margin-bottom: 8px; }
+.cost dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 16px; margin: 0 0 10px; }
+.cost dt { font-size: 12px; color: var(--muted); }
+.cost dd { margin: 2px 0 0; font-weight: 700; font-size: 14px; }
+.cost p.small { margin: 0; }
 .modal.wide { width: 720px; max-height: 92vh; overflow: auto; }
 .modal .store-head { margin-bottom: 16px; } .modal .store-head .eyebrow { margin-bottom: 2px; }
 .shots { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }

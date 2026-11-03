@@ -13,7 +13,7 @@ type App = {
   installed_on: string[]; apk: boolean; apk_mb: number | null; error?: string; summary?: string;
   fix_rounds?: number; version: string; build: number; created: number; updated: number;
   history: { time: number; message: string }[]; screenshot: boolean; preview: boolean; reference_shots: string[];
-  inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean };
+  inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean } & Partial<StoreCost>;
   ai_used: string[]; online?: string; question?: { why: string; provider: string; key: string | null };
   plan?: Plan; held?: boolean; features?: string[];
 };
@@ -22,7 +22,9 @@ type StoreApp = {
   appId: string; title: string; developer: string; icon: string; score: number | null; installs: string | null;
   genre: string | null; summary: string;
 };
-type StoreDetails = StoreApp & { description: string; screenshots: string[]; url: string; reviews: { score: number; text: string }[] };
+// What the original charges; iap is the store's purchase range, e.g. "$0.99 - $99.99 per item"
+type StoreCost = { installs: string | null; price: string | null; ads: boolean; iap: string | null };
+type StoreDetails = StoreApp & StoreCost & { description: string; screenshots: string[]; url: string; reviews: { score: number; text: string }[] };
 type View = "apps" | "devices" | "inspire" | "new" | "settings";
 type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null };
 type Subscription = { id: string; label: string; ok: boolean; detail: string };
@@ -396,6 +398,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
         {app.inspiration && (
           <p className="inspired-by"><img src={storeImg(app.inspiration.icon, 64)} alt="" />Inspired by {app.inspiration.title}{app.inspiration.apk ? " (studied the original app)" : ""}</p>
         )}
+        {app.inspiration && savings(app.inspiration) && <p className="saves"><Icon i={I.check} />{savings(app.inspiration)}</p>}
         {app.ai_used.length > 0 && <p className="uses-ai" title="Each use is billed to your API key"><Icon i={I.bulb} />Uses AI · {app.ai_used.join(", ")}</p>}
         {app.online && <p className="uses-ai" title="Free public data, looked up over the internet"><Icon i={I.globe} />Uses internet · {app.online}</p>}
         {phones.length > 0 &&<p className="installed"><Icon i={I.check} />Installed on {phones.join(", ")}</p>}
@@ -603,6 +606,32 @@ function targetBody(target: BuildTarget, devices: Device[]): BuildTarget {
 }
 
 /* ---------- Play Store inspiration ---------- */
+const topPrice = (iap: string) => iap.split(" - ").pop()!.replace(/\s*per item$/, "");
+
+/** One line for the app card: what the original charges that this version does not. */
+function savings(c: Partial<StoreCost>): string | null {
+  const paid = c.price && c.price !== "Free" ? c.price : null;
+  const parts = [paid && `costs ${paid}`, c.ads && "shows ads", c.iap && (c.iap === "yes" ? "has in-app purchases" : `has in-app purchases up to ${topPrice(c.iap)}`)].filter(Boolean);
+  return parts.length ? `The original ${parts.join(", ")}. Yours is free, with no ads.` : null;
+}
+
+function OriginalCost({ d }: { d: StoreCost }) {
+  const rows = [
+    ["Downloads", d.installs ?? "Unknown"],
+    ["Price", d.price ?? "Unknown"],
+    ["Ads", d.ads ? "Yes, shows ads" : "No ads"],
+    ["Premium and purchases", d.iap ? (d.iap === "yes" ? "Yes" : d.iap.replace(" - ", " to ")) : "None"],
+  ];
+  const saves = d.ads || !!d.iap || (!!d.price && d.price !== "Free");
+  return (
+    <div className="cost">
+      <p className="eyebrow">What the original costs</p>
+      <dl>{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+      <p className="small">{saves ? "Your version: free, no ads and nothing to buy. Everything the original keeps behind premium can be in yours." : "The original is free with no ads. Yours will be too, and it can work the way you want."}</p>
+    </div>
+  );
+}
+
 function StoreCard({ app, onPick }: { app: StoreApp; onPick: (a: StoreApp) => void }) {
   return (
     <article className="store-card">
@@ -706,6 +735,7 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
         {details && details.screenshots.length > 0 && (
           <div className="shots">{details.screenshots.slice(0, 6).map((s) => <img key={s} src={storeImg(s, 480)} alt="" loading="lazy" />)}</div>
         )}
+        {details && <OriginalCost d={details} />}
         <p className={`store-desc ${more ? "open" : ""}`}>{details?.description ?? app.summary}</p>
         {details && details.description.length > 300 && (
           <button className="link" onClick={() => setMore((v) => !v)}>{more ? "Show less" : "Read the full description"}</button>
