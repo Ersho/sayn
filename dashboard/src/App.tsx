@@ -16,6 +16,7 @@ type App = {
   inspiration?: { appId: string; title: string; icon: string; apk: boolean; reviews: boolean } & Partial<StoreCost>;
   ai_used: string[]; online?: string; question?: Question;
   plan?: Plan; held?: boolean; features?: string[];
+  game?: boolean; installing?: string[];  // installing: game tools downloaded for the first time (status "equipping")
 };
 type Plan = { name: string; features: string[]; extras: string[] };
 // What a job in "waiting" asks. kind "ai": may the app use an AI key; "explore": may the assistant try the original app
@@ -29,7 +30,9 @@ type StoreApp = {
 // What the original charges; iap is the store's purchase range, e.g. "$0.99 - $99.99 per item"
 type StoreCost = { installs: string | null; price: string | null; ads: boolean; iap: string | null };
 type StoreDetails = StoreApp & StoreCost & { description: string; screenshots: string[]; url: string; reviews: { score: number; text: string }[] };
-type View = "apps" | "devices" | "inspire" | "new" | "settings";
+type View = "apps" | "devices" | "inspire" | "games" | "new" | "settings";
+// One part of what a game gets beyond a normal app (GET /inspire/games); ready = already on this computer
+type KitItem = { id: string; label: string; ready: boolean; size: string; detail: string };
 type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null };
 type Subscription = { id: string; label: string; ok: boolean; detail: string };
 type IosCheck = { id: string; label: string; ok: boolean; hint: string };
@@ -59,18 +62,20 @@ function ago(t: number) {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  created: "Queued", preparing: "Preparing", inspiring: "Studying the original", studying: "Studying the original", exploring: "Trying the original", checking: "Understanding features",
+  created: "Queued", preparing: "Preparing", equipping: "Adding game tools", inspiring: "Studying the original", studying: "Studying the original", exploring: "Trying the original", checking: "Understanding features",
   waiting: "Needs your answer", reviewing: "Waiting for your review", coding: "Writing code", building: "Building",
   fixing: "Fixing build", ready: "Ready to install", failed: "Failed", cancelled: "Cancelled", unknown: "Imported",
 };
-const BUSY = new Set(["created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding", "building", "fixing"]);
-const BEFORE_CODE = new Set(["created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting"]);
+const BUSY = new Set(["created", "preparing", "equipping", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding", "building", "fixing"]);
+const BEFORE_CODE = new Set(["created", "preparing", "equipping", "inspiring", "studying", "exploring", "checking", "waiting"]);
 const PROVIDER_LABEL: Record<string, string> = { openai: "OpenAI", anthropic: "Anthropic (Claude)", gemini: "Google Gemini" };
 const CATEGORY_LABEL: Record<string, string> = {
   PRODUCTIVITY: "Productivity", HEALTH_AND_FITNESS: "Health & fitness", LIFESTYLE: "Lifestyle", TOOLS: "Tools",
   EDUCATION: "Education", FINANCE: "Finance", FOOD_AND_DRINK: "Food & drink", TRAVEL_AND_LOCAL: "Travel",
   HOUSE_AND_HOME: "Home", PARENTING: "Parenting", SPORTS: "Sports", WEATHER: "Weather",
-  GAME_PUZZLE: "Puzzle games", GAME_CASUAL: "Casual games", GAME_WORD: "Word games",
+  GAME_ACTION: "Action", GAME_ARCADE: "Arcade", GAME_CASUAL: "Casual", GAME_PUZZLE: "Puzzle", GAME_STRATEGY: "Strategy",
+  GAME_SIMULATION: "Simulation", GAME_RACING: "Racing", GAME_SPORTS: "Sports", GAME_ADVENTURE: "Adventure",
+  GAME_ROLE_PLAYING: "Role playing", GAME_BOARD: "Board", GAME_CARD: "Card", GAME_WORD: "Word", GAME_TRIVIA: "Trivia",
 };
 const AGENTS = {
   claude: { label: "Claude Code", blurb: "Thoughtful, reliable, great for polished apps." },
@@ -106,6 +111,7 @@ const I = {
   gear: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="2.5" /><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M4.7 15.3l1.4-1.4M13.9 6.1l1.4-1.4" /></svg>,
   pause: <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M8.25 7v6M11.75 7v6" /></svg>,
   star: <svg viewBox="0 0 20 20"><path d="M10 2.5l2.3 4.8 5.2.7-3.8 3.6.9 5.2L10 14.3l-4.6 2.5.9-5.2L2.5 8l5.2-.7z" fill="currentColor" /></svg>,
+  gamepad: <svg viewBox="0 0 20 20"><path d="M6 6.5h8a4 4 0 0 1 4 4v1.8a2.4 2.4 0 0 1-4.4 1.3l-1.1-1.6h-5l-1.1 1.6A2.4 2.4 0 0 1 2 12.3v-1.8a4 4 0 0 1 4-4z" /><path d="M6.5 9v2.5M5.25 10.25h2.5" /><circle cx="13" cy="9.5" r=".7" fill="currentColor" /><circle cx="14.75" cy="11.25" r=".7" fill="currentColor" /></svg>,
   hand: <svg viewBox="0 0 20 20"><path d="M7 10V4.5a1.25 1.25 0 0 1 2.5 0V9M9.5 8.5v-5a1.25 1.25 0 0 1 2.5 0v5M12 9V5a1.25 1.25 0 0 1 2.5 0v6.5c0 3.3-2.2 5.5-5 5.5-2 0-3.2-1-4.3-2.6L3.6 11.8a1.2 1.2 0 0 1 1.9-1.5L7 12" /></svg>,
 };
 const Icon = ({ i, className }: { i: ReactNode; className?: string }) => <span className={`ic ${className ?? ""}`}>{i}</span>;
@@ -160,14 +166,17 @@ function Badge({ status }: { status: string }) {
   );
 }
 
-function Progress({ status, log, inspired, asking }: { status: string; log: string[]; inspired?: boolean; asking?: Question["kind"] }) {
+function Progress({ status, log, inspired, asking, game, installing }: {
+  status: string; log: string[]; inspired?: boolean; asking?: Question["kind"]; game?: boolean; installing?: string[];
+}) {
   const [showLog, setShowLog] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
   useEffect(() => { if (showLog) logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [log, showLog]);
-  const keys = ["preparing", ...(inspired ? ["inspiring"] : []), "checking", "coding", "building", "ready"];
+  const keys = ["preparing", ...(game ? ["equipping"] : []), ...(inspired ? ["inspiring"] : []), "checking", "coding", "building", "ready"];
   const phoneStep = status === "exploring" || (status === "waiting" && (asking === "explore" || asking === "login"));
   const label: Record<string, string> = {
     preparing: "Preparing project",
+    equipping: "Adding game tools",
     inspiring: phoneStep ? (status === "waiting" ? "Waiting for your answer" : "Trying the original on your phone") : "Studying the original app",
     checking: status === "waiting" ? "Waiting for your answer" : status === "reviewing" ? "Waiting for your review" : "Understanding the features",
     coding: "Writing the code",
@@ -185,6 +194,9 @@ function Progress({ status, log, inspired, asking }: { status: string; log: stri
           </li>
         ))}
       </ol>
+      {status === "equipping" && installing && installing.length > 0 && (
+        <p className="muted small">First game on this computer: installing {installing.join(", ").toLowerCase()}. This happens once and can take a few minutes.</p>
+      )}
       {status === "failed" && <p className="error">The build failed after several fix attempts. Open the app card for details.</p>}
       {status === "cancelled" && <p className="muted">You stopped this build.</p>}
       <button className="link" onClick={() => setShowLog((v) => !v)}>{showLog ? "Hide technical log" : "Show technical log"}</button>
@@ -391,6 +403,7 @@ function DeployButton({ app, devices, onDone, go }: { app: App; devices: Device[
 
 function describeCommit(m: string) {
   if (m === "template") return "Started from the blank template";
+  if (m === "sayn: game kit") return "Added the game tools";
   const who = m.startsWith("claude:") ? "Claude Code" : "Codex";
   if (/^(codex|claude): create$/.test(m)) return `First version written by ${who}`;
   const fix = m.match(/^(?:codex|claude): fix (\d+)/);
@@ -427,7 +440,7 @@ function AppCard({ app, tone, devices, reload, onRevise, go }: {
           <span className="app-icon">{app.name[0]?.toUpperCase()}</span>
           <div className="title">
             <h3>{app.name}</h3>
-            <div className="meta">{app.platform === "ios" ? "iOS" : "Android"}{app.platform === "ios" && app.ios_target === "simulator" ? " Simulator" : ""} · v{app.version} · {busy ? "Working now" : `Updated ${ago(app.updated)}`}</div>
+            <div className="meta">{app.game ? "Game · " : ""}{app.platform === "ios" ? "iOS" : "Android"}{app.platform === "ios" && app.ios_target === "simulator" ? " Simulator" : ""} · v{app.version} · {busy ? "Working now" : `Updated ${ago(app.updated)}`}</div>
           </div>
           <Badge status={app.status} />
         </div>
@@ -712,6 +725,31 @@ function OriginalCost({ d }: { d: StoreCost }) {
     </div>
   );
 }
+/** What building a game adds, and which parts are new on this computer (installed while the first game builds). */
+function GameKit({ kit, compact }: { kit: KitItem[]; compact?: boolean }) {
+  const fresh = kit.filter((k) => !k.ready);
+  return (
+    <div className="kit">
+      <p className="eyebrow">{fresh.length ? "New for games" : "Game tools"}</p>
+      <p className="small">{fresh.length
+        ? "Games need a few extra tools. The parts marked New are installed once, while your first game builds; later games reuse them."
+        : "Everything games need is already on this computer."}</p>
+      <ul>
+        {kit.map((k) => (
+          <li key={k.id}>
+            <span className={`kit-tag ${k.ready ? "ready" : "new"}`}>{k.ready ? "Ready" : "New"}</span>
+            <div>
+              <b>{k.label}</b>
+              {!compact && <small>{k.detail}</small>}
+              <small className="muted">{k.ready && k.id !== "skills" ? "Already on this computer" : k.size}</small>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function StoreCard({ app, onPick }: { app: StoreApp; onPick: (a: StoreApp) => void }) {
   return (
     <article className="store-card">
@@ -731,15 +769,19 @@ function StoreCard({ app, onPick }: { app: StoreApp; onPick: (a: StoreApp) => vo
   );
 }
 
-function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
-  const [categories, setCategories] = useState<string[]>(Object.keys(CATEGORY_LABEL));
-  const [category, setCategory] = useState("PRODUCTIVITY");
+function InspirePage({ onPick, games }: { onPick: (a: StoreApp) => void; games?: boolean }) {
+  const [categories, setCategories] = useState<string[]>(Object.keys(CATEGORY_LABEL).filter((c) => c.startsWith("GAME_") === !!games));
+  const [category, setCategory] = useState(games ? "GAME_ACTION" : "PRODUCTIVITY");
+  const [kit, setKit] = useState<KitItem[]>([]);
   const [q, setQ] = useState("");
   const [term, setTerm] = useState("");
   const [apps, setApps] = useState<StoreApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  useEffect(() => { api<{ categories: string[] }>("/inspire").then((i) => setCategories(i.categories)).catch(() => {}); }, []);
+  useEffect(() => {
+    api<{ categories: string[]; kit?: KitItem[] }>(games ? "/inspire/games" : "/inspire")
+      .then((i) => { setCategories(i.categories); setKit(i.kit ?? []); }).catch(() => {});
+  }, [games]);
   useEffect(() => {
     let alive = true;
     setLoading(true); setError("");
@@ -753,11 +795,14 @@ function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
     <>
       <header className="page-head">
         <div>
-          <p className="eyebrow">Borrow the idea, make it yours</p>
-          <h1>Popular on the Play Store.</h1>
-          <p className="sub">Pick an app you like and your assistant builds your own version of it, with the changes you want.</p>
+          <p className="eyebrow">{games ? "Borrow the fun, make it yours" : "Borrow the idea, make it yours"}</p>
+          <h1>{games ? "Popular games on the Play Store." : "Popular on the Play Store."}</h1>
+          <p className="sub">{games
+            ? "Pick a game you like and your assistant builds your own version: its own name, characters and look, with no ads and nothing to buy."
+            : "Pick an app you like and your assistant builds your own version of it, with the changes you want."}</p>
         </div>
       </header>
+      {games && kit.length > 0 && <GameKit kit={kit} compact />}
       <div className="toolbar">
         <div className="chips">
           {categories.map((c) => (
@@ -767,7 +812,7 @@ function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
           ))}
         </div>
         <form className="search" onSubmit={(e) => { e.preventDefault(); setTerm(q.trim()); }}>
-          <Icon i={I.search} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search the Play Store…" />
+          <Icon i={I.search} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={games ? "Search Play Store games…" : "Search the Play Store…"} />
           {term && <button type="button" className="link" onClick={() => { setQ(""); setTerm(""); }}>Clear</button>}
         </form>
       </div>
@@ -780,13 +825,18 @@ function InspirePage({ onPick }: { onPick: (a: StoreApp) => void }) {
       ) : (
         <div className="store-cards">{apps.map((a) => <StoreCard key={a.appId} app={a} onPick={onPick} />)}</div>
       )}
-      <p className="foot-note"><Icon i={I.shield} />Only the idea is borrowed. Your app gets its own name, look and code, and nothing is copied from the original.</p>
+      <p className="foot-note"><Icon i={I.shield} />{games
+        ? "Only the idea is borrowed. Your game gets its own name, characters, look and code, and nothing is copied from the original."
+        : "Only the idea is borrowed. Your app gets its own name, look and code, and nothing is copied from the original."}</p>
     </>
   );
 }
 
-function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; devices: Device[]; onClose: () => void; onStarted: (id: string) => void }) {
+function InspireDialog({ app, game, devices, onClose, onStarted }: {
+  app: StoreApp; game: boolean; devices: Device[]; onClose: () => void; onStarted: (id: string) => void;
+}) {
   const [details, setDetails] = useState<StoreDetails | null>(null);
+  const [kit, setKit] = useState<KitItem[]>([]);
   const [more, setMore] = useState(false);
   const [notes, setNotes] = useState("");
   const [agent, setAgent] = useState<keyof typeof AGENTS>("claude");
@@ -795,7 +845,8 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api<StoreDetails>(`/inspire/app/${app.appId}`).then(setDetails).catch(() => setDetails(null));
-  }, [app.appId]);
+    if (game) api<{ kit: KitItem[] }>("/inspire/games").then((i) => setKit(i.kit)).catch(() => {});
+  }, [app.appId, game]);
   const good = details?.reviews.filter((r) => r.score >= 4).length ?? 0;
   const bad = details?.reviews.filter((r) => r.score <= 2).length ?? 0;
   return (
@@ -819,7 +870,8 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
         )}
         <label className="field">What should be different in your version? <span className="muted">(optional)</span>
           <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)}
-            placeholder="e.g. simpler, offline only, a calmer design, and add a weekly summary" />
+            placeholder={game ? "e.g. funny meme characters instead of soldiers, more levels, a boss at the end"
+              : "e.g. simpler, offline only, a calmer design, and add a weekly summary"} />
         </label>
         <label className="check">
           <input type="checkbox" checked={reviews} onChange={(e) => setReviews(e.target.checked)} />
@@ -828,6 +880,8 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
             <small>{details ? `Your assistant reads ${details.reviews.length} user reviews (${good} happy, ${bad} unhappy)` : "Your assistant reads user reviews"} to keep what people love and fix what they complain about. Untick to build from the description and screenshots only.</small>
           </span>
         </label>
+        {game && kit.length > 0 && <GameKit kit={kit} />}
+        {game && <p className="muted small">Games take longer than apps, usually 30 to 60 minutes: your assistant builds the whole game and plays it in a browser to check it.</p>}
         <TargetPicker target={target} setTarget={setTarget} devices={devices} />
         <AgentPicker agent={agent} setAgent={setAgent} />
         <div className="row-end">
@@ -835,10 +889,10 @@ function InspireDialog({ app, devices, onClose, onStarted }: { app: StoreApp; de
           <button className="primary" disabled={busy} onClick={async () => {
             setBusy(true);
             try {
-              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, ...targetBody(target, devices), inspiration: { app_id: app.appId, reviews } }) });
+              const r = await api<{ id: string }>("/apps", { method: "POST", body: JSON.stringify({ request: notes, agent, ...targetBody(target, devices), inspiration: { app_id: app.appId, reviews }, game }) });
               onStarted(r.id);
             } catch (e) { alert(String(e)); setBusy(false); }
-          }}>{busy ? "Starting…" : "Build my version"} <Icon i={I.arrow} /></button>
+          }}>{busy ? "Starting…" : game ? "Build my game" : "Build my version"} <Icon i={I.arrow} /></button>
         </div>
       </div>
     </div>
@@ -1176,7 +1230,8 @@ function NewAppPage({ apps, devices, reload, job, setJob, go, onRevise }: {
                 <div className="meta">{app?.agent === "claude" ? "Claude Code" : "Codex"}{app?.model ? ` (${app.model})` : ""} is on it · {app?.platform === "ios" ? "iPhone / iPad" : "Android"}</div></div>
               <Badge status={status || app?.status || "created"} />
             </div>
-            <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} asking={app?.question?.kind} />
+            <Progress status={status || app?.status || "created"} log={log} inspired={!!app?.inspiration} asking={app?.question?.kind}
+              game={app?.game} installing={app?.installing} />
             {app && <AskUser app={app} reload={reload} go={go} />}
             {app && <Features app={app} reload={reload} />}
             {app && running && <div className="row-end"><CancelButton app={app} reload={reload} /></div>}
@@ -1325,6 +1380,7 @@ export default function Root() {
   const [job, setJob] = useState("");          // id of the app currently being created or revised
   const [revising, setRevising] = useState<App | null>(null);
   const [inspiring, setInspiring] = useState<StoreApp | null>(null);
+  const [inspireGame, setInspireGame] = useState(false);  // picked on the games page
   const devices = useDevices();
   const { apps, reload } = useApps();
   const online = devices.filter((d) => d.state === "device").length;
@@ -1338,6 +1394,7 @@ export default function Root() {
     { v: "devices", label: <>Devices ({online}){online > 0 ? <span className="nav-dot ok" title="Phone connected" />
       : setup ? <span className="nav-dot warn" title="A phone needs setting up" /> : null}</>, icon: I.phone },
     { v: "inspire", label: "Get inspired", icon: I.bulb },
+    { v: "games", label: "Get inspired: games", icon: I.gamepad },
     { v: "new", label: "New app", icon: I.newfile },
     { v: "settings", label: "Settings", icon: I.gear },
   ];
@@ -1354,7 +1411,8 @@ export default function Root() {
       <main>
         {view === "apps" && <AppsPage apps={apps} devices={devices} reload={reload} go={setView} job={job} onRevise={setRevising} />}
         {view === "devices" && <PhonesPage devices={devices} apps={apps} go={setView} />}
-        {view === "inspire" && <InspirePage onPick={setInspiring} />}
+        {view === "inspire" && <InspirePage key="apps" onPick={(a) => { setInspiring(a); setInspireGame(false); }} />}
+        {view === "games" && <InspirePage key="games" games onPick={(a) => { setInspiring(a); setInspireGame(true); }} />}
         {view === "settings" && <SettingsPage />}
         {view === "new" && <NewAppPage apps={apps} devices={devices} reload={reload} job={job} setJob={setJob} go={setView} onRevise={setRevising} />}
       </main>
@@ -1363,7 +1421,7 @@ export default function Root() {
           onStarted={(id) => { setRevising(null); setJob(id); setView("new"); reload(); }} />
       )}
       {inspiring && (
-        <InspireDialog app={inspiring} devices={devices} onClose={() => setInspiring(null)}
+        <InspireDialog app={inspiring} game={inspireGame} devices={devices} onClose={() => setInspiring(null)}
           onStarted={(id) => { setInspiring(null); setJob(id); setView("new"); reload(); }} />
       )}
     </div>

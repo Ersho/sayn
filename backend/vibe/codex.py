@@ -74,12 +74,17 @@ INSPIRE_SPEC_PHONE = (", plus a look through the app itself on the user's phone 
                       "named in the spec; look at the ones for the screens you build)")
 
 
-def inspiration_block(info: dict | None) -> str:
+INSPIRE_GAME = """
+The user was inspired by the Play Store game "{title}". Its store description{reviews_where} is in inspiration/listing.md and its store screenshots are inspiration/screenshot-*.png; read the listing and look at every screenshot before you start. Build your own game with the same core gameplay loop, controls and feel{reviews_how} and match the camera, scale, art direction and mood of the screenshots. No ads, no accounts, no paid currency, no energy timers or pay walls: whatever the original sells is earned by playing. Do not reuse the original's name, characters, branding, art, music or text: invent your own, with a name of its own.
+"""
+
+
+def inspiration_block(info: dict | None, game: bool = False) -> str:
     if not info:
         return ""
     reviews = info.get("reviews", True)
-    return (INSPIRE.format(title=info["title"], reviews_where=REVIEWS_WHERE if reviews else "",
-                           reviews_how=REVIEWS_HOW if reviews else "")
+    return ((INSPIRE_GAME if game else INSPIRE).format(title=info["title"], reviews_where=REVIEWS_WHERE if reviews else "",
+                                                        reviews_how=REVIEWS_HOW if reviews else "")
             + (INSPIRE_APK if info.get("apk") else ""))
 
 
@@ -175,6 +180,7 @@ def references_block(app: Path) -> str:
 
 NAME_PICK = ('Pick a plain name of one to three words that says what the app does, like "Book Ideas", "Calorie Counter" '
              'or "Video Editor": not a made-up brand and not the name of an existing app.')
+GAME_NAME_PICK = 'Pick a short, catchy name of one to three words for the game: not the name of an existing game.'
 NAME_GIVEN = 'The user wants the app to be called "{name}"; use exactly that name.'
 
 REVISE = """Read AGENTS.md and vibe.json. This app already exists and works. The user asks for this change:
@@ -216,8 +222,8 @@ PLAN_NAME = """NAME: a plain name of one to three words that says what the app d
 """
 
 
-def plan_ask(name_given: bool) -> str:
-    return PLAN_ASK.format(name="" if name_given else PLAN_NAME)
+def plan_ask(name_given: bool, game: bool = False) -> str:
+    return PLAN_ASK.format(name="" if name_given else GAME_PLAN_NAME if game else PLAN_NAME)
 
 
 def parse_plan(answer: str) -> dict | None:
@@ -237,6 +243,27 @@ def features_block(features: list[str]) -> str:
         return ""
     return ("\nThe user confirmed that the app has these features; build all of them and keep the app focused on them:\n"
             + "".join(f"- {f}\n" for f in features))
+# Games run offline and never get an AI key or data service, so their check only lists the features (PLAN_ASK).
+GAME_CHECK = """Do not change any files and do not run any commands; only answer. A user asked for this phone game:
+
+{request}
+
+Answer with exactly these lines and nothing else:{plan}"""
+GAME_CHECK_LISTING = """
+
+The game is modelled on a Play Store game. Its store listing:
+
+{listing}
+
+Now answer with exactly the lines described above."""
+GAME_PLAN_NAME = """NAME: a short, catchy name of one to three words for this game; not the name of an existing game
+"""
+
+# Appended to the create, revise and fix prompts of a game (vibe.json "game": true).
+GAME = """
+This is a game. Read GAMES.md now, before anything else, and follow it: the game tools that are already installed, the game-development skills in .claude/skills/, what is different on a phone, and how to play-test the game in a browser.
+"""
+
 AI_CHECK_CREATE = "this phone app"
 AI_CHECK_REVISE = "this change to their existing phone app"
 

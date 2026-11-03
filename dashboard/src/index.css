@@ -219,6 +219,16 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .cost dt { font-size: 12px; color: var(--muted); }
 .cost dd { margin: 2px 0 0; font-weight: 700; font-size: 14px; }
 .cost p.small { margin: 0; }
+.kit { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 0 0 18px; }
+.modal .kit { margin: 16px 0 0; }
+.kit .eyebrow { margin-bottom: 4px; }
+.kit p.small { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+.kit ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px 18px; }
+.kit li { display: flex; gap: 10px; align-items: flex-start; }
+.kit b { display: block; font-size: 14px; } .kit small { display: block; font-size: 12.5px; line-height: 1.4; margin-top: 2px; }
+.kit-tag { flex-shrink: 0; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; margin-top: 1px; }
+.kit-tag.new { background: var(--busy); color: var(--busy-text); }
+.kit-tag.ready { background: var(--ok); color: var(--ok-text); }
 .modal.wide { width: 720px; max-height: 92vh; overflow: auto; }
 .modal .store-head { margin-bottom: 16px; } .modal .store-head .eyebrow { margin-bottom: 2px; }
 .shots { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }

@@ -18,6 +18,12 @@ template/              Expo app that every generated app starts from
   vibe.json            {id, name, request} — filled by the backend
   app.json             __VIBE_ID__ / __VIBE_NAME__ placeholders
   AGENTS.md            instructions for Codex inside a generated app
+games/                 the game kit, added on top of the template for games only (games.add_kit)
+  GAMES.md             instructions for the agent inside a game ({tester} is filled per app)
+  skills/              threejs-game-skills (MIT, vendored unchanged, see SOURCE.md) → the app's .claude/skills/
+  metro.config.js      resolves `three` to its ES module build (its CommonJS build calls process.emitWarning, which Hermes lacks)
+  plugins/withGlKeep.js   R8 keep rule for expo.modules.gl (release builds strip GLView's constructor otherwise)
+  play.mjs             game tester: plays the web preview in headless Chromium and saves screenshots
 backend/vibe/
   api.py               FastAPI routes (devices, apps, revise, answer, events SSE, deploy, permissions, screenshot)
   workspace.py         workspace paths, app creation from template, git commits, status/vibe files
@@ -25,13 +31,14 @@ backend/vibe/
   claude.py            the single `claude -p` command (same run() signature as codex.py)
   settings.py          Settings tab: agent sign-in checks (`codex login status`, `claude auth status`), API keys in keys.json (verified; no global on/off), the one key an app was allowed is written to its .env as EXPO_PUBLIC_* before the agent runs
   playstore.py         Play Store browsing (top charts, search, details) + the per-app inspiration/ folder (listing, screenshots, APK)
+  games.py             game categories, the game kit (pinned packages, app.json plugins, skills, GAMES.md) and the game tester install; kit() says what is new on this computer
 backend/playstore/     tiny Node CLI around google-play-scraper (playstore.mjs); playstore.py shells out to it
   build.py             tsc → expo prebuild → Gradle or Xcode, agent fix loop, revise, permissions
   ios.py               Xcode CLI device discovery, Apple team selection, setup checkpoints, devicectl / simctl install and launch
   devices.py           adbutils wrapper: list (+ phones.json history, + phones only the OS sees over USB = debugging off), install (+ XAPK splits), uninstall, launch, screenshot
   phone.py             standalone CLI the agent runs to see and drive the original app on the phone (look, tap, type, scroll, back, restart)
 dashboard/             Vite + React + TypeScript single-page UI (src/App.tsx, src/index.css)
-                       sidebar: My apps, Devices, Get inspired, New app, Settings
+                       sidebar: My apps, Devices, Get inspired, Get inspired: games, New app, Settings
 ```
 
 Runtime data lives outside the repo in `%USERPROFILE%\vibeapping\`:
@@ -47,6 +54,8 @@ config.json            {keystore, alias, password, ios_team?} written by setup; 
 phones.json            {serial: {model, first_seen, last_seen}}: every phone ever seen; GET /devices merges it in as state "offline"
 vibe.jks               release keystore (alias "vibe", 10000-day validity)
 tools/jadx-headless-mcp-0.7.1-all.jar   downloaded by setup.ps1; REA needs it for APK analysis (env REA_JADX_MCP_JAR)
+tools/game-tester/     Playwright + headless Chromium (browsers/) + play.mjs, installed while the first game builds
+tools/game-kit.json    the game packages npm has downloaded once (so the dashboard stops calling them new)
 cache/images/          Play Store icons and screenshots, fetched once via GET /inspire/image?u=&w= (Google rate-limits direct hotlinking)
 ```
 
@@ -62,6 +71,7 @@ cache/images/          Play Store icons and screenshots, fetched once via GET /i
 | Dashboard | Vite 8, React 19, TypeScript, no UI library | `cd dashboard && npm run dev` → http://localhost:5173 (CORS is limited to this origin) |
 | Device | adb from the SDK platform-tools (37.x); the phone is a Pixel 11 Pro | adbutils for list/launch/screenshot, the `adb` binary for `install -r` (faster for 30 MB APKs) |
 | Play Store | google-play-scraper 10.1.4 (npm, unofficial; breaks when Google changes markup) | `list` (top free per category), `search`, `app` (+ 40 helpful reviews); 24 h in-memory cache |
+| Games | three 0.187.0, @react-three/fiber 9.8.2, expo-gl / expo-asset / expo-file-system / expo-audio / expo-haptics (SDK 58 ranges), @types/three; Playwright 1.64.1 | pinned in `games.py`; three and fiber were tested on Hermes, change them only with a phone test |
 | APK analysis | REA (`rea-agents@6.7.0`, MCP server via `npx`) + jadx-headless-mcp 0.7.1 jar | APK comes from `d.apkpure.net/b/APK/<pkg>?version=latest` (plain APK or XAPK, the base APK is extracted) |
 
 ## How a request flows
@@ -84,7 +94,8 @@ cache/images/          Play Store icons and screenshots, fetched once via GET /i
    - **Make it closer to the original**: `POST /apps/{id}/closer` (inspired apps only; the dashboard link on a built app opens a warning that it takes a while and may need the user to sign in on the phone) runs `build.closer()`: `_job(..., study=True)` downloads the APK once (`playstore.ensure_apk()`), then `build._study()` runs before `checking`: **`studying`**, an agent run with REA (`mcp=True`) and web search (`web=True`) and the **study** prompt (`codex.STUDY`: listing, store screenshots, the user's reference pictures, the APK, Reddit/X/YouTube/help pages), writes `inspiration/spec.md` and ends with `MISSING:` lines. When something is missing and an Android phone is connected, status `waiting` with `question {kind: "explore", missing, device, installed, title}`. On yes: **`exploring`**, the original is installed (unless it already is; with the XAPK's splits, `adb install-multiple`) and launched, `inspiration/phone.json` names the phone, and the agent drives it with `phone.py` (`codex.EXPLORE`), saving `inspiration/screens/` and a "Seen on the phone" section in the spec. `phone.py` captures and taps only while the original's own window has focus (no Play billing dialogs, other apps or the lock screen) and refuses to type into password fields; the prompt forbids signing in, personal data, purchases and ads. An agent that hits a sign-in wall ends with `LOGIN: <what>`: `question {kind: "login", what}`, the user signs in on the phone themselves and continues (up to 2 times) or skips. Afterwards the app is uninstalled again if this step installed it. Every part is optional: a failure is logged and the build goes on. The check then also reads the spec, and the revision prompt `codex.closer_prompt()` builds from the spec and screens (`INSPIRE_SPEC`), or from the listing when the study failed. Version bump and commit `<agent>: closer to the original`. Mirroring the phone on the laptop (scrcpy) is a possible later addition, not part of this.
    - `POST /apps/{id}/answer {yes}` answers every question kind (`ai`, `explore`, `login`).
 6. `POST /apps/{id}/revise {request, images?}` → same pipeline (`references/` is replaced by this request's pictures, or removed when there are none) with the **revise** prompt and the agent stored in `vibe.json`, patch version bump in `app.json`, commit `<agent>: revise: <request>`. The check runs on the change request too; an app that already uses AI keeps its key without asking, and a known data service is kept. Refused with 409 while the app is busy.
-7. `GET /apps` adds `ai_used` (provider labels whose `EXPO_PUBLIC_*_API_KEY` the app's code reads), shown as "Uses AI" on the card; `online` from `vibe.json` is shown as "Uses internet".
+7. **Games** (`vibe.json` `game: true`, from the dashboard's "Get inspired: games" page: `GET /inspire/games` gives `games.CATEGORIES` and `kit` = what a game adds, each part `ready` or new on this computer; the page and the build dialog show it before anything is installed). `POST /apps {..., game: true}`; the pipeline adds **`equipping`** after `preparing` (status extra `installing` = the parts downloaded for the first time, shown under the step): `games.ensure_tester()` installs Playwright and the headless Chromium into `tools/game-tester` once (about 300 MB; a failure is logged and the agent works without it), `games.add_kit()` installs the pinned packages into the app (`npm install`), copies `metro.config.js`, `plugins/withGlKeep.js`, the skills and `GAMES.md`, adds the plugins (`expo-audio` without microphone, RECORD_AUDIO blocked) and git-excludes `artifacts/`; commit `sayn: game kit`, which a hold or cancel keeps. The check is `codex.GAME_CHECK` (name and features only; games never get an AI key or data service, a revision of a game skips the check), the inspiration block is `INSPIRE_GAME` (same core loop and feel, own characters and art, no ads or paid currency), and the create, revise, closer and fix prompts get `codex.GAME` (read GAMES.md). GAMES.md tells the agent to follow the skills' director, adapt them to Expo (React Native HUD, WebGL2 only, no generators), keep startup under 2 s on Hermes, and play-test with `node <tester>/play.mjs http://localhost:<port> artifacts/play` against `npx expo start --web` (one port per app). Games take 30 to 60 minutes; the dialog says so.
+8. `GET /apps` adds `ai_used` (provider labels whose `EXPO_PUBLIC_*_API_KEY` the app's code reads), shown as "Uses AI" on the card; `online` from `vibe.json` is shown as "Uses internet".
 
 ## Agent invocation (keep it in one place per agent: `backend/vibe/codex.py`, `backend/vibe/claude.py`)
 

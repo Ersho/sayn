@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import claude, codex, devices, ios, playstore, settings, workspace
+from . import claude, codex, devices, games, ios, playstore, settings, workspace
 
 MAX_FIX_ROUNDS = 5
 ERROR_TAIL = 200
@@ -158,36 +158,42 @@ def pipeline(app_id: str, request: str, emit: Emit, agent: str = "codex", name: 
     inspiration = {"app_id": <Play Store package>, "apk": bool, "reviews": bool}: the listing (and APK) is saved to
     inspiration/ first and the create prompt tells the agent to build its own version of that app.
     The check also lists the app's features (the plan); the user may stop to review them before the code is written."""
+    game = workspace.read_vibe(app_id).get("game", False)
+
     def prompt(info: dict | None, plan: dict | None) -> str:
         given = (plan or {}).get("name") or name
-        return codex.CREATE.format(request=request, inspiration=codex.inspiration_block(info),
+        return codex.CREATE.format(request=request, inspiration=codex.inspiration_block(info, game),
                                    references=codex.references_block(workspace.app_dir(app_id)),
                                    features=codex.features_block((plan or {}).get("features", [])),
-                                   naming=codex.NAME_GIVEN.format(name=given) if given else codex.NAME_PICK)
+                                   naming=codex.NAME_GIVEN.format(name=given) if given
+                                   else codex.GAME_NAME_PICK if game else codex.NAME_PICK) + (codex.GAME if game else "")
 
+    check = (codex.GAME_CHECK.format(request=request, plan=codex.plan_ask(bool(name), game=True)) if game else
+             codex.AI_CHECK.format(what=codex.AI_CHECK_CREATE, request=request, plan=codex.plan_ask(bool(name))))
     _job(app_id, emit, agent, prompt, "create", after=lambda message: _apply_name(app_id, message),
-         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_CREATE, request=request, plan=codex.plan_ask(bool(name))),
-         inspiration=inspiration)
+         ai_check=check, inspiration=inspiration)
 
 
 def revise(app_id: str, request: str, emit: Emit) -> None:
     """Change an existing app with the agent that wrote it, bump the patch version, rebuild."""
-    agent = workspace.read_vibe(app_id).get("agent", "codex")
-    _job(app_id, emit, agent, lambda _, __: codex.REVISE.format(
-             request=request, references=codex.references_block(workspace.app_dir(app_id))), f"revise: {request[:60]}",
-         after=lambda _: _bump_version(app_id),
-         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request, plan=""))
+    vibe = workspace.read_vibe(app_id)
+    game = vibe.get("game", False)
+    _job(app_id, emit, vibe.get("agent", "codex"), lambda _, __: codex.REVISE.format(
+             request=request, references=codex.references_block(workspace.app_dir(app_id))) + (codex.GAME if game else ""),
+         f"revise: {request[:60]}", after=lambda _: _bump_version(app_id),
+         ai_check="" if game else codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, request=request, plan=""))
 
 
 def closer(app_id: str, emit: Emit) -> None:
     """"Make it closer to the original": study the original deeply (_study), then revise the app from the spec."""
     vibe = workspace.read_vibe(app_id)
     title = vibe["inspiration"]["title"]
+    game = vibe.get("game", False)
     _job(app_id, emit, vibe.get("agent", "codex"),
-         lambda info, _: codex.closer_prompt(info or vibe["inspiration"], workspace.app_dir(app_id)),
+         lambda info, _: codex.closer_prompt(info or vibe["inspiration"], workspace.app_dir(app_id)) + (codex.GAME if game else ""),
          "closer to the original", after=lambda _: _bump_version(app_id),
-         ai_check=codex.AI_CHECK.format(what=codex.AI_CHECK_REVISE, plan="",
-                                        request=f'Make it closer to the original app "{title}": its screens, flows and features.'),
+         ai_check="" if game else codex.AI_CHECK.format(
+             what=codex.AI_CHECK_REVISE, plan="", request=f'Make it closer to the original app "{title}": its screens, flows and features.'),
          study=True)
 
 
@@ -211,13 +217,19 @@ def _check(app_id: str, ai_check: str, run: Callable, status: Callable, emit: Em
     vibe = workspace.read_vibe(app_id)
     used = settings.used_providers(app)  # older apps got keys before vibe.json recorded the answer
     current = vibe.get("ai") or (used[0] if used and "ai" not in vibe else None)
+    game = vibe.get("game", False)
+    if game and not ai_check:  # revising a game: games never get a key or a data service, nothing to ask
+        return None, "", ""
     status("checking")
     listing = app / "inspiration" / "listing.md"  # an inspired app's request is one line; its features are here
     if listing.exists():
         spec = app / "inspiration" / "spec.md"  # written by the studying step
-        ai_check += codex.AI_CHECK_LISTING.format(listing=listing.read_text("utf-8")[:6000]
-                                                  + ("\n\n" + spec.read_text("utf-8")[:6000] if spec.exists() else ""))
+        ai_check += (codex.GAME_CHECK_LISTING if game else codex.AI_CHECK_LISTING).format(
+            listing=listing.read_text("utf-8")[:6000] + ("\n\n" + spec.read_text("utf-8")[:6000] if spec.exists() else ""))
     answer = run(app, ai_check, emit)
+    if game:  # the game check only lists the features
+        workspace.update_vibe(app_id, ai=False)
+        return None, "", answer
     need, wanted, why, online = codex.parse_ai_check(answer)
     online = online or vibe.get("online", "")
     if online:
@@ -335,9 +347,19 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
         emit("status", s)
 
     before = workspace.head(app)
+    game = workspace.read_vibe(app_id).get("game", False)
     try:
         status("preparing")
         workspace.install_node_modules(app)
+        if game:
+            new = [k["label"] for k in games.kit() if not k["ready"]]
+            status("equipping", installing=new)  # the dashboard tells the user what is downloaded for the first time
+            setup = lambda args, cwd: _run(app, args, emit, cwd=cwd)  # noqa: E731
+            tester = games.ensure_tester(setup, emit)
+            games.add_kit(app, setup, emit, tester)
+            if subprocess.run(["git", "status", "--porcelain"], cwd=app, capture_output=True, text=True).stdout.strip():
+                workspace.commit(app, "sayn: game kit")
+            before = workspace.head(app)  # a hold or a cancel rolls back to here and keeps the kit
         info = None
         if inspiration:
             status("inspiring")
@@ -398,7 +420,7 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
             if round_ == MAX_FIX_ROUNDS:
                 break
             status("fixing", round=round_ + 1)
-            run(app, codex.FIX.format(error=error), emit)
+            run(app, codex.FIX.format(error=error) + (codex.GAME if game else ""), emit)
             workspace.commit(app, f"{agent}: fix {round_ + 1}")
 
         if error:
