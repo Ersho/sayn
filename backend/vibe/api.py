@@ -1,8 +1,10 @@
 """FastAPI app. Run: uv run uvicorn vibe.api:app --port 8000"""
 import asyncio
+import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -20,8 +22,9 @@ app = FastAPI(title="vibeApping")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
 TERMINAL = {"ready", "failed", "cancelled", "deployed", "unknown"}
-BUSY = {"created", "preparing", "inspiring", "checking", "waiting", "reviewing", "coding", "building", "fixing"}
-HOLDABLE = {"created", "preparing", "inspiring", "checking", "waiting", "coding"}  # before the code is finished
+BUSY = {"created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding",
+        "building", "fixing"}
+HOLDABLE = {"created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "coding"}  # before the code is finished
 EVENTS_FILE = "events.jsonl"
 
 
@@ -38,7 +41,7 @@ def _events(app_id: str) -> list[dict]:
 
 class Inspiration(BaseModel):
     app_id: str   # Play Store package name
-    apk: bool = False  # also download the APK and let the agent study it with REA
+    apk: bool = False  # also download the APK and let the agent study it with REA while it writes the code
     reviews: bool = True  # give the agent user reviews: keep what people praise, fix what they complain about
 
 
@@ -50,10 +53,12 @@ class NewApp(BaseModel):
     ios_target: str = "device"  # "device" or "simulator"
     ios_device: str = ""
     inspiration: Inspiration | None = None
+    images: list[str] = []  # reference pictures as data URLs ("make it look like this"), saved to references/
 
 
 class Revise(BaseModel):
     request: str
+    images: list[str] = []
 
 
 class Deploy(BaseModel):
@@ -69,7 +74,7 @@ class KeyValue(BaseModel):
 
 
 class Answer(BaseModel):
-    use_ai: bool
+    yes: bool  # "ai": use the key; "explore": try the original on the phone; "login": the user signed in, carry on
 
 
 class Plan(BaseModel):
@@ -175,7 +180,7 @@ def get_apps():
         a["artifact"] = build.artifact_path(workspace.app_dir(a["id"])).exists()
         a["ai_used"] = [settings.PROVIDERS[p]["label"] for p in settings.used_providers(workspace.app_dir(a["id"]))]
         a["held"] = a["id"] in workspace.HOLDS
-        if a["status"] == "waiting" and a.get("question"):  # a key added in Settings meanwhile shows up right away
+        if a["status"] == "waiting" and a.get("question", {}).get("kind", "ai") == "ai":  # a key added in Settings meanwhile shows up right away
             a["question"]["key"] = settings.pick(a["question"]["provider"])
     return apps
 
@@ -205,11 +210,13 @@ def post_app(body: NewApp):
                                        and d["kind"] == body.ios_target and d["state"] == "device"
                                        for d in devices.list_devices()):
             raise HTTPException(400, "Connect the selected iPhone/iPad or start the selected Simulator first.")
+    images = _decode_images(body.images)
     name = body.name.strip()[:40]
     app_id = workspace.new_id(name)
     workspace.create_app(app_id, name or "New app", request, body.agent, body.platform,
                          body.ios_target if body.platform == "ios" else "device",
                          body.ios_device if body.platform == "ios" else "")
+    _save_references(app_id, images)
     emit(app_id, "status", "created")
     build.start(build.pipeline, app_id, request, lambda k, t: emit(app_id, k, t), body.agent, name, inspiration)
     return {"id": app_id}
@@ -268,10 +275,65 @@ def post_revise(app_id: str, body: Revise):
         raise HTTPException(400, "empty request")
     if workspace.read_status(app_id)["status"] in BUSY:
         raise HTTPException(409, "app is busy")
+    _save_references(app_id, _decode_images(body.images))  # pictures of an earlier request do not carry over
     workspace.write_status(app_id, "created")
     emit(app_id, "status", "created")
     build.start(build.revise, app_id, request, lambda k, t: emit(app_id, k, t))
     return {"id": app_id}
+
+
+@app.post("/apps/{app_id}/closer")
+def post_closer(app_id: str):
+    """"Make it closer to the original" for an app made from a Play Store app: a deep study of the original (its APK,
+    the web, and the phone if the user agrees), then a revision built from it."""
+    _exists(app_id)
+    if not workspace.read_vibe(app_id).get("inspiration"):
+        raise HTTPException(400, "This app was not made from a Play Store app.")
+    if not playstore.apk_ready():
+        raise HTTPException(400, "Studying the original is not set up on this computer yet. Run the setup script again.")
+    if workspace.read_status(app_id)["status"] in BUSY:
+        raise HTTPException(409, "app is busy")
+    workspace.write_status(app_id, "created")
+    emit(app_id, "status", "created")
+    build.start(build.closer, app_id, lambda k, t: emit(app_id, k, t))
+    return {"id": app_id}
+
+
+MAX_IMAGES = 4
+MAX_IMAGE_MB = 8
+IMAGE_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
+
+
+def _decode_images(images: list[str]) -> list[tuple[str, bytes]]:
+    """[(extension, bytes)] from "data:image/png;base64,..." strings; 400 on anything else."""
+    if len(images) > MAX_IMAGES:
+        raise HTTPException(400, f"Add at most {MAX_IMAGES} pictures.")
+    out = []
+    for img in images:
+        m = re.fullmatch(r"data:(image/[a-z]+);base64,(.+)", img, re.S)
+        if not m or m[1] not in IMAGE_TYPES:
+            raise HTTPException(400, "Pictures must be PNG, JPEG, WebP or GIF.")
+        data = base64.b64decode(m[2])
+        if len(data) > MAX_IMAGE_MB * 1_000_000:
+            raise HTTPException(400, f"Each picture can be at most {MAX_IMAGE_MB} MB.")
+        out.append((IMAGE_TYPES[m[1]], data))
+    return out
+
+
+def _save_references(app_id: str, images: list[tuple[str, bytes]]) -> None:
+    """Write references/ref-N.<ext> (git-excluded like inspiration/), replacing the pictures of an earlier request."""
+    app = workspace.app_dir(app_id)
+    folder = app / "references"
+    shutil.rmtree(folder, ignore_errors=True)
+    if not images:
+        return
+    folder.mkdir()
+    exclude = app / ".git" / "info" / "exclude"
+    if "references/" not in exclude.read_text("utf-8"):
+        exclude.open("a", encoding="utf-8").write("\nreferences/\n")
+    for i, (ext, data) in enumerate(images, 1):
+        (folder / f"ref-{i}.{ext}").write_bytes(data)
+    emit(app_id, "build", f"saved {len(images)} reference picture(s) to references/")
 
 
 @app.post("/apps/{app_id}/cancel")
@@ -289,18 +351,19 @@ def post_cancel(app_id: str):
 
 @app.post("/apps/{app_id}/answer")
 def post_answer(app_id: str, body: Answer):
-    """The user's answer to "this app wants to use AI": the paused job carries on with or without the key."""
+    """The user's answer to the question the paused job asks (status.json "question"): it carries on either way."""
     _exists(app_id)
     st = workspace.read_status(app_id)
     if st["status"] != "waiting":
         raise HTTPException(409, "This app is not waiting for an answer.")
-    if body.use_ai and not settings.pick(st["question"]["provider"]):
+    question = st["question"]
+    if body.yes and question.get("kind", "ai") == "ai" and not settings.pick(question["provider"]):
         raise HTTPException(400, "Add a working key in Settings first.")
     if app_id not in workspace.JOBS:  # the backend restarted while the job was waiting
         workspace.write_status(app_id, "cancelled")
         emit(app_id, "status", "cancelled")
         raise HTTPException(409, "This build stopped while it waited. Start it again.")
-    workspace.ANSWERS[app_id] = body.use_ai
+    workspace.ANSWERS[app_id] = body.yes
     return {"ok": True}
 
 

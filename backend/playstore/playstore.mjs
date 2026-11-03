@@ -24,6 +24,8 @@ if (cmd === "top") {
   out = {
     ...brief(a), description: strip(a.description), screenshots: a.screenshots, ratings: a.ratings, version: a.version,
     updated: a.updated, url: a.url,
+    // What the original costs: the store lists only a purchase range ("$0.99 - $99.99 per item"), not the subscription price
+    price: a.priceText || null, ads: !!a.adSupported, iap: a.offersIAP ? a.IAPRange || "yes" : null,
     reviews: reviews.map((r) => ({ score: r.score, text: (r.text || "").slice(0, 600) })),
   };
 } else {

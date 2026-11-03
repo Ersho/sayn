@@ -100,6 +100,9 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .history li { display: flex; gap: 10px; } .history .muted { width: 110px; flex-shrink: 0; }
 .fail summary { cursor: pointer; color: var(--bad-text); font-size: 14px; }
 .fail pre { white-space: pre-wrap; font-size: 11px; max-height: 200px; overflow: auto; background: #f6f6f6; padding: 8px; border-radius: 8px; }
+.closer-steps { margin: 4px 0 10px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; line-height: 1.5; }
+.closer-steps b { color: var(--text); }
+.closer-btn { width: 100%; justify-content: center; margin-top: 6px; }
 .card-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
 .deploy { display: inline-flex; gap: 8px; align-items: center; }
 
@@ -209,6 +212,13 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .rating .ic svg { stroke: none; }
 .inspired-by { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .inspired-by img { width: 20px; height: 20px; border-radius: 6px; }
+.saves { font-size: 13px; color: var(--green-ink); display: flex; align-items: center; gap: 6px; }
+.cost { background: var(--green-light); border-radius: 12px; padding: 14px 16px; margin: 0 0 16px; color: var(--green-ink); }
+.cost .eyebrow { margin-bottom: 8px; }
+.cost dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 16px; margin: 0 0 10px; }
+.cost dt { font-size: 12px; color: var(--muted); }
+.cost dd { margin: 2px 0 0; font-weight: 700; font-size: 14px; }
+.cost p.small { margin: 0; }
 .modal.wide { width: 720px; max-height: 92vh; overflow: auto; }
 .modal .store-head { margin-bottom: 16px; } .modal .store-head .eyebrow { margin-bottom: 2px; }
 .shots { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }
@@ -243,6 +253,7 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .ai-ask { border: 1px solid #f0d9a6; background: #fffaf0; border-radius: 12px; padding: 14px 16px; margin-top: 14px; display: flex; flex-direction: column; gap: 6px; line-height: 1.45; }
 .ai-ask b { display: flex; align-items: center; gap: 6px; color: var(--busy-text); }
 .ai-ask .row-end { margin-top: 8px; }
+.ai-ask ul { margin: 0; padding-left: 20px; }
 .features { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
 .pause-card { display: flex; align-items: center; gap: 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; color: var(--green-ink); }
 .pause-card.on { background: var(--green-light); border-color: transparent; }
@@ -268,3 +279,13 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .modal.wide .shots img { height: 420px; }
 .try-frame { width: 300px; height: 600px; margin: 0 auto 8px; border: 8px solid #1c1c1e; border-radius: 30px; overflow: hidden; background: #fff; }
 .try-frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+.pictures { border-radius: 12px; }
+.pictures.over { outline: 2px dashed var(--green); outline-offset: 6px; }
+.modal .pictures .field-label { font-size: 15px; font-weight: 600; margin: 16px 0 4px; }
+.picture-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.picture { position: relative; width: 72px; height: 72px; border-radius: 10px; border: 1px solid var(--line); overflow: hidden; background: var(--soft); }
+.picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.picture button { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .6); color: #fff; font-size: 15px; line-height: 1; padding: 0; }
+.picture.add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 13px; font-weight: 600; color: var(--green-ink); border-style: dashed; }
+.picture.add:hover { border-color: var(--green); }
