@@ -232,8 +232,16 @@ def inspire_info():
 
 @app.get("/inspire/games")
 def inspire_games():
-    """The game categories, and what building a game adds on this computer (games.kit(): ready = nothing to download)."""
-    return {"categories": games.CATEGORIES, "kit": games.kit()}
+    """The game categories, what games need on this computer (games.kit(): ready = nothing to download), whether the game
+    area is turned on, and the progress of "Turn on games"."""
+    return {"categories": games.CATEGORIES, "kit": games.kit(), "active": games.active(), "activation": games.ACTIVATION}
+
+
+@app.post("/games/activate")
+def activate_games():
+    """"Turn on games": download the game skills and install the game tester in the background (GET /inspire/games)."""
+    games.turn_on()
+    return {"activation": games.ACTIVATION}
 
 
 @app.get("/inspire/top/{category}")

@@ -33,6 +33,7 @@ type StoreDetails = StoreApp & StoreCost & { description: string; screenshots: s
 type View = "apps" | "devices" | "inspire" | "games" | "new" | "settings";
 // One part of what a game gets beyond a normal app (GET /inspire/games); ready = already on this computer
 type KitItem = { id: string; label: string; ready: boolean; size: string; detail: string };
+type GamesInfo = { categories: string[]; kit: KitItem[]; active: boolean; activation: { running: boolean; step: string; error: string } };
 type KeyInfo = { id: string; label: string; saved: boolean; hint: string | null; valid: boolean | null; message: string | null };
 type Subscription = { id: string; label: string; ok: boolean; detail: string };
 type IosCheck = { id: string; label: string; ok: boolean; hint: string };
@@ -732,7 +733,7 @@ function GameKit({ kit, compact }: { kit: KitItem[]; compact?: boolean }) {
     <div className="kit">
       <p className="eyebrow">{fresh.length ? "New for games" : "Game tools"}</p>
       <p className="small">{fresh.length
-        ? "Games need a few extra tools. The parts marked New are installed once, while your first game builds; later games reuse them."
+        ? "Games need a few extra tools. The parts marked New are downloaded once; later games reuse them."
         : "Everything games need is already on this computer."}</p>
       <ul>
         {kit.map((k) => (
@@ -747,6 +748,26 @@ function GameKit({ kit, compact }: { kit: KitItem[]; compact?: boolean }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+/** The games page until the game area is turned on: what gets downloaded, and the one button that does it. */
+function TurnOnGames({ info, reload }: { info: GamesInfo; reload: () => void }) {
+  const { running, step, error } = info.activation;
+  return (
+    <section className="panel turn-on">
+      <h2>Turn on games</h2>
+      <p className="sub">Games need a few tools that everyday apps don't. Nothing is downloaded until you turn games on, and you only do this once.</p>
+      <GameKit kit={info.kit} />
+      {error && !running && <p className="error">{error}</p>}
+      <div className="row-end">
+        {running && <span className="muted small"><span className="dot" />{step.length > 90 ? step.slice(0, 90) + "…" : step}</span>}
+        <button className="primary" disabled={running} onClick={async () => {
+          try { await api("/games/activate", { method: "POST" }); } catch (e) { alert(String(e)); }
+          reload();
+        }}><Icon i={I.gamepad} />{running ? "Turning on games…" : error ? "Try again" : "Turn on games"}</button>
+      </div>
+    </section>
   );
 }
 
@@ -772,17 +793,25 @@ function StoreCard({ app, onPick }: { app: StoreApp; onPick: (a: StoreApp) => vo
 function InspirePage({ onPick, games }: { onPick: (a: StoreApp) => void; games?: boolean }) {
   const [categories, setCategories] = useState<string[]>(Object.keys(CATEGORY_LABEL).filter((c) => c.startsWith("GAME_") === !!games));
   const [category, setCategory] = useState(games ? "GAME_ACTION" : "PRODUCTIVITY");
-  const [kit, setKit] = useState<KitItem[]>([]);
+  const [info, setInfo] = useState<GamesInfo | null>(null);
   const [q, setQ] = useState("");
   const [term, setTerm] = useState("");
   const [apps, setApps] = useState<StoreApp[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const loadInfo = () => {
+    if (games) api<GamesInfo>("/inspire/games").then((i) => { setInfo(i); setCategories(i.categories); }).catch(() => {});
+    else api<{ categories: string[] }>("/inspire").then((i) => setCategories(i.categories)).catch(() => {});
+  };
+  useEffect(loadInfo, [games]);
+  useEffect(() => {  // "Turn on games" runs in the background; follow its progress
+    if (!info?.activation.running) return;
+    const t = setTimeout(loadInfo, 1500);
+    return () => clearTimeout(t);
+  }, [info]);
+  const locked = !!games && info?.active !== true;  // the game area is off (or not known yet): no store list
   useEffect(() => {
-    api<{ categories: string[]; kit?: KitItem[] }>(games ? "/inspire/games" : "/inspire")
-      .then((i) => { setCategories(i.categories); setKit(i.kit ?? []); }).catch(() => {});
-  }, [games]);
-  useEffect(() => {
+    if (locked) return;
     let alive = true;
     setLoading(true); setError("");
     const p = term ? api<StoreApp[]>(`/inspire/search?q=${encodeURIComponent(term)}`) : api<StoreApp[]>(`/inspire/top/${category}`);
@@ -790,7 +819,7 @@ function InspirePage({ onPick, games }: { onPick: (a: StoreApp) => void; games?:
       .catch((e) => { if (alive) { setApps([]); setError(String(e)); } })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [category, term]);
+  }, [category, term, locked]);
   return (
     <>
       <header className="page-head">
@@ -802,7 +831,7 @@ function InspirePage({ onPick, games }: { onPick: (a: StoreApp) => void; games?:
             : "Pick an app you like and your assistant builds your own version of it, with the changes you want."}</p>
         </div>
       </header>
-      {games && kit.length > 0 && <GameKit kit={kit} compact />}
+      {locked ? (info && <TurnOnGames info={info} reload={loadInfo} />) : <>
       <div className="toolbar">
         <div className="chips">
           {categories.map((c) => (
@@ -825,6 +854,7 @@ function InspirePage({ onPick, games }: { onPick: (a: StoreApp) => void; games?:
       ) : (
         <div className="store-cards">{apps.map((a) => <StoreCard key={a.appId} app={a} onPick={onPick} />)}</div>
       )}
+      </>}
       <p className="foot-note"><Icon i={I.shield} />{games
         ? "Only the idea is borrowed. Your game gets its own name, characters, look and code, and nothing is copied from the original."
         : "Only the idea is borrowed. Your app gets its own name, look and code, and nothing is copied from the original."}</p>

@@ -219,6 +219,10 @@ select { font: inherit; font-size: 14px; padding: 9px 10px; border-radius: 10px;
 .cost dt { font-size: 12px; color: var(--muted); }
 .cost dd { margin: 2px 0 0; font-weight: 700; font-size: 14px; }
 .cost p.small { margin: 0; }
+.turn-on { max-width: 860px; }
+.turn-on .sub { margin: 6px 0 16px; }
+.turn-on .row-end { align-items: center; gap: 14px; }
+.turn-on .row-end .small { display: flex; align-items: center; gap: 8px; }
 .kit { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 0 0 18px; }
 .modal .kit { margin: 16px 0 0; }
 .kit .eyebrow { margin-bottom: 4px; }

@@ -354,9 +354,9 @@ def _job(app_id: str, emit: Emit, agent: str, prompt: Callable[[dict | None, dic
         if game:
             new = [k["label"] for k in games.kit() if not k["ready"]]
             status("equipping", installing=new)  # the dashboard tells the user what is downloaded for the first time
-            setup = lambda args, cwd: _run(app, args, emit, cwd=cwd)  # noqa: E731
-            tester = games.ensure_tester(setup, emit)
-            games.add_kit(app, setup, emit, tester)
+            games.ensure_skills(emit)  # normally there already: "Turn on games" downloads them
+            tester = games.ensure_tester(emit)
+            games.add_kit(app, lambda args, cwd: _run(app, args, emit, cwd=cwd), emit, tester)
             if subprocess.run(["git", "status", "--porcelain"], cwd=app, capture_output=True, text=True).stdout.strip():
                 workspace.commit(app, "sayn: game kit")
             before = workspace.head(app)  # a hold or a cancel rolls back to here and keeps the kit
