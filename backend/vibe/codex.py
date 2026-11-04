@@ -75,7 +75,7 @@ INSPIRE_SPEC_PHONE = (", plus a look through the app itself on the user's phone 
 
 
 INSPIRE_GAME = """
-The user was inspired by the Play Store game "{title}". Its store description{reviews_where} is in inspiration/listing.md and its store screenshots are inspiration/screenshot-*.png; read the listing and look at every screenshot before you start. Build your own game with the same core gameplay loop, controls and feel{reviews_how} and match the camera, scale, art direction and mood of the screenshots. No ads, no accounts, no paid currency, no energy timers or pay walls: whatever the original sells is earned by playing. Do not reuse the original's name, characters, branding, art, music or text: invent your own, with a name of its own.
+The user was inspired by the Play Store game "{title}". Its store description{reviews_where} is in inspiration/listing.md and its store screenshots are inspiration/screenshot-*.png; read the listing and look at every screenshot before you start. Build your own game of the same type: the same core gameplay loop, controls and feel{reviews_how} and a first level that looks like the screenshots: the same camera, framing, density of characters and objects, layout, colour palette and mood. Someone who knows the original should recognise the kind of game at a glance. No ads, no accounts, no paid currency, no energy timers or pay walls: whatever the original sells is earned by playing. Do not reuse the original's name, characters, branding, art, music or text: invent your own, with a name of its own.
 """
 
 
@@ -216,14 +216,18 @@ Now answer with exactly the lines described above."""
 
 # Feature understanding, asked in the same call as AI_CHECK when an app is created; the user may review the list.
 PLAN_ASK = """
-{name}FEATURE: one feature the app will have, in a few plain words a non-technical user understands; one FEATURE line per feature, 5 to 8 of them, the most important first, covering what the user asked for
+{name}FEATURE: one feature the app will have, in a few plain words a non-technical user understands; one FEATURE line per feature, {count}, the most important first, covering what the user asked for
 EXTRA: one feature it could also have but will not get unless the user picks it; 3 to 5 EXTRA lines"""
+# Games get few, core features: a first level that looks and plays right matters more than many systems.
+GAME_FEATURES = ("3 or 4 of them (the core gameplay and what makes it look and feel like the game the user wants; "
+                 "progression, shops and extra modes go on EXTRA lines)")
 PLAN_NAME = """NAME: a plain name of one to three words that says what the app does, like "Book Ideas", "Calorie Counter" or "Video Editor"; not a made-up brand and not the name of an existing app
 """
 
 
 def plan_ask(name_given: bool, game: bool = False) -> str:
-    return PLAN_ASK.format(name="" if name_given else GAME_PLAN_NAME if game else PLAN_NAME)
+    return PLAN_ASK.format(name="" if name_given else GAME_PLAN_NAME if game else PLAN_NAME,
+                           count=GAME_FEATURES if game else "5 to 8 of them")
 
 
 def parse_plan(answer: str) -> dict | None:
@@ -261,7 +265,7 @@ GAME_PLAN_NAME = """NAME: a short, catchy name of one to three words for this ga
 
 # Appended to the create, revise and fix prompts of a game (vibe.json "game": true).
 GAME = """
-This is a game. Read GAMES.md now, before anything else, and follow it: the game tools that are already installed, the game-development skills in .claude/skills/, what is different on a phone, and how to play-test the game in a browser.
+This is a game. Read GAMES.md now, before anything else, and follow it: the premium bar and the order of work (the core scene must look and play like the target pictures before anything else is added), the game tools that are already installed, the game-development skills in .claude/skills/, what is different on a phone, and how to play-test the game and compare it side by side with the target pictures.
 """
 
 AI_CHECK_CREATE = "this phone app"
