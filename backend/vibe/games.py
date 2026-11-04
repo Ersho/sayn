@@ -43,7 +43,15 @@ TESTER_READY = """Play the game in a browser and look at it before you finish. S
 
     node "{play}" http://localhost:{port} artifacts/play
 
-It opens the game in a phone-sized browser, taps, holds and drags left and right like a player, and saves screenshots to artifacts/play/. Open and look at every screenshot, fix what looks wrong, empty or broken, and run it again. Stop the web server when you are done. The browser renders in software, so its frame rate says nothing about the phone. Do not install Playwright into this project."""
+It opens the game in a phone-sized browser, taps, holds and drags left and right like a player, and saves screenshots to artifacts/play/. Open and look at every screenshot and fix what looks wrong, empty or broken.
+
+When there are target pictures (inspiration/screenshot-*.png or references/ref-*), put your game next to them:
+
+    node "{compare}" artifacts/play/2-play.png inspiration/screenshot-1.png artifacts/compare-1.png
+
+Pick the store screenshot closest to that moment of play (use another play screenshot or target picture where it fits better), open the comparison image, and list the differences one by one: type of game, camera, density and scale, layout, colours and lighting, effects, HUD. Fix them, play again and compare again: at least two rounds, and keep going while the difference is big.
+
+Stop the web server when you are done. The browser renders in software, so its frame rate says nothing about the phone. Do not install Playwright into this project."""
 TESTER_MISSING = """No browser tester is installed on this computer. Check your work by reading the code carefully: the scene setup, the camera, the game loop and every game state."""
 
 Emit = Callable[[str, str], None]
@@ -147,7 +155,8 @@ def ensure_skills(emit: Emit) -> None:
 def ensure_tester(emit: Emit) -> bool:
     """Install the game tester once (Playwright and its headless Chromium in TESTER); False when that fails."""
     TESTER.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(KIT / "play.mjs", TESTER / "play.mjs")
+    for script in ("play.mjs", "compare.mjs"):
+        shutil.copy2(KIT / script, TESTER / script)
     if tester_ready():
         return True
     emit("build", "installing the game tester (once on this computer, about 300 MB)")
@@ -186,7 +195,8 @@ def add_kit(app: Path, run: Callable[[list[str], Path], tuple[int, list[str]]], 
     shutil.copy2(KIT / "plugins" / "withGlKeep.js", app / "plugins" / "withGlKeep.js")
     shutil.copytree(SKILLS, app / ".claude" / "skills", dirs_exist_ok=True, ignore=shutil.ignore_patterns(".commit"))
     port = 19100 + zlib.crc32(app.name.encode()) % 800  # one per app, so two games can be tested at once
-    testing = TESTER_READY.format(port=port, play=(TESTER / "play.mjs").as_posix()) if tester else TESTER_MISSING
+    testing = (TESTER_READY.format(port=port, play=(TESTER / "play.mjs").as_posix(), compare=(TESTER / "compare.mjs").as_posix())
+               if tester else TESTER_MISSING)
     (app / "GAMES.md").write_text((KIT / "GAMES.md").read_text("utf-8").replace("{tester}", testing), "utf-8")
 
     app_json = app / "app.json"
