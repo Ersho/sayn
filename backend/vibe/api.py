@@ -16,15 +16,15 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from . import build, devices, ios, playstore, settings, workspace
+from . import build, devices, games, ios, playstore, settings, workspace
 
 app = FastAPI(title="vibeApping")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
 TERMINAL = {"ready", "failed", "cancelled", "deployed", "unknown"}
-BUSY = {"created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding",
+BUSY = {"created", "preparing", "equipping", "inspiring", "studying", "exploring", "checking", "waiting", "reviewing", "coding",
         "building", "fixing"}
-HOLDABLE = {"created", "preparing", "inspiring", "studying", "exploring", "checking", "waiting", "coding"}  # before the code is finished
+HOLDABLE = {"created", "preparing", "equipping", "inspiring", "studying", "exploring", "checking", "waiting", "coding"}  # before the code is finished
 EVENTS_FILE = "events.jsonl"
 
 
@@ -54,6 +54,7 @@ class NewApp(BaseModel):
     ios_device: str = ""
     inspiration: Inspiration | None = None
     images: list[str] = []  # reference pictures as data URLs ("make it look like this"), saved to references/
+    game: bool = False  # a game: gets the game kit (games/) and the game prompts
 
 
 class Revise(BaseModel):
@@ -217,6 +218,8 @@ def post_app(body: NewApp):
                          body.ios_target if body.platform == "ios" else "device",
                          body.ios_device if body.platform == "ios" else "")
     _save_references(app_id, images)
+    if body.game:
+        workspace.update_vibe(app_id, game=True)
     emit(app_id, "status", "created")
     build.start(build.pipeline, app_id, request, lambda k, t: emit(app_id, k, t), body.agent, name, inspiration)
     return {"id": app_id}
@@ -227,9 +230,23 @@ def inspire_info():
     return {"categories": playstore.CATEGORIES, "apk_ready": playstore.apk_ready()}
 
 
+@app.get("/inspire/games")
+def inspire_games():
+    """The game categories, what games need on this computer (games.kit(): ready = nothing to download), whether the game
+    area is turned on, and the progress of "Turn on games"."""
+    return {"categories": games.CATEGORIES, "kit": games.kit(), "active": games.active(), "activation": games.ACTIVATION}
+
+
+@app.post("/games/activate")
+def activate_games():
+    """"Turn on games": download the game skills and install the game tester in the background (GET /inspire/games)."""
+    games.turn_on()
+    return {"activation": games.ACTIVATION}
+
+
 @app.get("/inspire/top/{category}")
 def inspire_top(category: str):
-    if category not in playstore.CATEGORIES:
+    if category not in playstore.CATEGORIES + games.CATEGORIES:
         raise HTTPException(400, "unknown category")
     return _scrape(lambda: playstore.top(category))
 

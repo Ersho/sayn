@@ -23,7 +23,7 @@ CACHE_TTL = 24 * 3600
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) vibeApping"}
 
 CATEGORIES = ["PRODUCTIVITY", "HEALTH_AND_FITNESS", "LIFESTYLE", "TOOLS", "EDUCATION", "FINANCE", "FOOD_AND_DRINK",
-              "TRAVEL_AND_LOCAL", "HOUSE_AND_HOME", "PARENTING", "SPORTS", "WEATHER", "GAME_PUZZLE", "GAME_CASUAL", "GAME_WORD"]
+              "TRAVEL_AND_LOCAL", "HOUSE_AND_HOME", "PARENTING", "SPORTS", "WEATHER"]  # games: games.CATEGORIES
 
 _cache: dict[tuple, tuple[float, object]] = {}
 
